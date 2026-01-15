@@ -7,7 +7,13 @@ import pandas as pd
 import numpy as np
 from typing import List
 import sys
-sys.path.append('..')
+import os
+
+# Add parent directory to path for base_loader import
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 from base_loader import StaticDataLoader
 
 
@@ -33,9 +39,20 @@ class DemographicsLoader(StaticDataLoader):
         Returns:
             DataFrame with PATNO + demographics features
         """
+        def resolve_path(file_path):
+            """Resolve file path, handling relative paths that start with ../"""
+            if os.path.isabs(file_path):
+                return file_path
+            if file_path.startswith('../'):
+                return os.path.normpath(os.path.abspath(file_path))
+            return os.path.normpath(os.path.join(self.base_dir, file_path))
+        
         # Load participant status
-        status_path = f"{self.base_dir}/{self.config['data'].participant_status}"
+        status_path = resolve_path(self.config['data'].participant_status)
         print(f"Loading participant status from: {status_path}")
+        if not os.path.exists(status_path):
+            raise FileNotFoundError(f"Participant status file not found: {status_path}\n"
+                                  f"  Checked: {os.path.abspath(status_path)}")
         df = pd.read_csv(status_path)
         
         # Select relevant columns
@@ -109,6 +126,10 @@ if __name__ == "__main__":
     print("Testing DemographicsLoader")
     print("=" * 80)
     
+    # Add parent directories to path for config import
+    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if v1_dir not in sys.path:
+        sys.path.insert(0, v1_dir)
     from training.config import get_default_config
     
     config = get_default_config()

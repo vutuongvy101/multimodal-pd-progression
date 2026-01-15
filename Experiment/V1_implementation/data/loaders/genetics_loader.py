@@ -7,7 +7,13 @@ import pandas as pd
 import numpy as np
 from typing import List
 import sys
-sys.path.append('..')
+import os
+
+# Add parent directory to path for base_loader import
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 from base_loader import StaticDataLoader
 
 
@@ -35,19 +41,46 @@ class GeneticsLoader(StaticDataLoader):
         Returns:
             DataFrame with PATNO + all genetics features
         """
+        def resolve_path(file_path):
+            """Resolve file path, handling relative paths that start with ../"""
+            # If path is absolute, return as-is
+            if os.path.isabs(file_path):
+                return file_path
+            
+            # If path starts with ../, resolve relative to current working directory
+            if file_path.startswith('../'):
+                resolved = os.path.normpath(os.path.abspath(file_path))
+            else:
+                # Otherwise, resolve relative to base_dir
+                resolved = os.path.normpath(os.path.join(self.base_dir, file_path))
+            
+            return resolved
+        
         # Load genetic consensus
-        consensus_path = f"{self.base_dir}/{self.config['data'].genetic_consensus}"
+        consensus_path = resolve_path(self.config['data'].genetic_consensus)
         print(f"Loading genetic consensus from: {consensus_path}")
+        if not os.path.exists(consensus_path):
+            raise FileNotFoundError(f"Genetic consensus file not found: {consensus_path}\n"
+                                  f"  Checked: {os.path.abspath(consensus_path)}\n"
+                                  f"  Base dir: {os.path.abspath(self.base_dir)}")
         consensus_df = pd.read_csv(consensus_path)
         
         # Load PRS scores
-        prs_path = f"{self.base_dir}/{self.config['data'].prs_scores}"
+        prs_path = resolve_path(self.config['data'].prs_scores)
         print(f"Loading PRS scores from: {prs_path}")
+        if not os.path.exists(prs_path):
+            raise FileNotFoundError(f"PRS scores file not found: {prs_path}\n"
+                                  f"  Checked: {os.path.abspath(prs_path)}\n"
+                                  f"  Base dir: {os.path.abspath(self.base_dir)}")
         prs_df = pd.read_csv(prs_path)
         
         # Load principal components
-        pcs_path = f"{self.base_dir}/{self.config['data'].prs_pcs}"
+        pcs_path = resolve_path(self.config['data'].prs_pcs)
         print(f"Loading PCs from: {pcs_path}")
+        if not os.path.exists(pcs_path):
+            raise FileNotFoundError(f"Principal components file not found: {pcs_path}\n"
+                                  f"  Checked: {os.path.abspath(pcs_path)}\n"
+                                  f"  Base dir: {os.path.abspath(self.base_dir)}")
         pcs_df = pd.read_csv(pcs_path)
         
         # Select relevant columns from consensus
@@ -115,6 +148,11 @@ if __name__ == "__main__":
     print("=" * 80)
     
     # This is a test - you'll need to adjust paths to your actual data
+    # Add parent directories to path for config import
+    import os
+    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if v1_dir not in sys.path:
+        sys.path.insert(0, v1_dir)
     from training.config import get_default_config
     
     config = get_default_config()

@@ -147,11 +147,26 @@ Edit `training/config.py` to point to your PPMI data:
 ```python
 @dataclass
 class DataConfig:
-    base_dir: str = "../../ppmi_pd"  # Update this
+    # Path configuration options:
+    # 1. Use absolute paths (recommended)
+    base_dir: str = "/full/path/to/ppmi_pd"
+    genetic_consensus: str = "/full/path/to/genetics/iu_genetic_consensus_*.csv"
+    
+    # 2. Use paths relative to base_dir (without ../)
+    base_dir: str = "../../ppmi_pd"
     participant_status: str = "Participant_Status_14Dec2025.csv"
+    
+    # 3. Use paths relative to where script is run (paths starting with ../)
+    # These are resolved relative to current working directory
     genetic_consensus: str = "../genetics/iu_genetic_consensus_*.csv"
-    # ... update other paths
 ```
+
+**Path Resolution Rules:**
+- Paths starting with `/` are treated as absolute paths
+- Paths starting with `../` are resolved relative to the **current working directory**
+- Other paths are resolved relative to `base_dir`
+
+**Recommended**: Use absolute paths or update paths to be relative to `base_dir` (without `../` prefix).
 
 ### 4. Test Components
 

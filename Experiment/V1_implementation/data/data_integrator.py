@@ -8,13 +8,27 @@ import numpy as np
 from scipy.stats import linregress
 from typing import Dict, List, Tuple
 import sys
-sys.path.append('..')
+import os
 
-from loaders.genetics_loader import GeneticsLoader
-from loaders.demographics_loader import DemographicsLoader
-from loaders.updrs_loader import UPDRSLoader
-from loaders.clinical_loader import ClinicalAssessmentsLoader
-from loaders.medication_loader import MedicationLoader
+# Add parent directory to path for imports
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+# Try relative imports first, then absolute
+try:
+    from data.loaders.genetics_loader import GeneticsLoader
+    from data.loaders.demographics_loader import DemographicsLoader
+    from data.loaders.updrs_loader import UPDRSLoader
+    from data.loaders.clinical_loader import ClinicalAssessmentsLoader
+    from data.loaders.medication_loader import MedicationLoader
+except ImportError:
+    # Fall back to direct imports if running from data/ directory
+    from loaders.genetics_loader import GeneticsLoader
+    from loaders.demographics_loader import DemographicsLoader
+    from loaders.updrs_loader import UPDRSLoader
+    from loaders.clinical_loader import ClinicalAssessmentsLoader
+    from loaders.medication_loader import MedicationLoader
 
 
 class DataIntegrator:
@@ -227,6 +241,10 @@ class DataIntegrator:
 # ============================================================================
 
 if __name__ == "__main__":
+    # Ensure parent directory is in path (already done above, but keep for clarity)
+    v1_dir = os.path.dirname(parent_dir)  # Go up one more level from data/ to V1_implementation/
+    if v1_dir not in sys.path:
+        sys.path.insert(0, v1_dir)
     from training.config import get_default_config
     
     print("=" * 80)

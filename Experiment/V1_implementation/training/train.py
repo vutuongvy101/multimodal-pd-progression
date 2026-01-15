@@ -11,7 +11,12 @@ import json
 from tqdm import tqdm
 from typing import Dict, Tuple
 import sys
-sys.path.append('..')
+import os
+
+# Add parent directory (V1_implementation) to path for imports
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 from models.v1_model import V1MultimodalTransformer
 from training.config import get_default_config

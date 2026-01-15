@@ -7,7 +7,13 @@ import pandas as pd
 import numpy as np
 from typing import List
 import sys
-sys.path.append('..')
+import os
+
+# Add parent directory to path for base_loader import
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 from base_loader import LongitudinalDataLoader
 
 
@@ -145,6 +151,10 @@ if __name__ == "__main__":
     print("Testing MedicationLoader")
     print("=" * 80)
     
+    # Add parent directories to path for config import
+    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if v1_dir not in sys.path:
+        sys.path.insert(0, v1_dir)
     from training.config import get_default_config
     
     config = get_default_config()

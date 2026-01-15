@@ -167,25 +167,26 @@ class DataConfig:
     """Configuration for data paths"""
     
     # Base directory
-    base_dir: str = "../../ppmi_pd"
+    base_dir: str = "../../../ppmi_pd"
     
     # Input files
     participant_status: str = "Participant_Status_14Dec2025.csv"
-    genetic_consensus: str = "../genetics/iu_genetic_consensus_20251025_14Dec2025.csv"
-    prs_scores: str = "../genetics/Polygenic_Risk_Scores_14Dec2025.csv"
-    prs_pcs: str = "../genetics/PPMI_Project_9001_20250624_14Dec2025.csv"
+    # Genetics files (relative to base_dir)
+    genetic_consensus: str = "Genetic_Status/iu_genetic_consensus_20251025_14Dec2025.csv"
+    prs_scores: str = "Genetic_Status/Polygenic_Risk_Scores_14Dec2025.csv"
+    prs_pcs: str = "Genetic_Status/PPMI_Project_9001_20250624_14Dec2025.csv"
     
     # Clinical files (to be added based on your data structure)
-    updrs_part1: str = "MDS_UPDRS_Part_I.csv"
-    updrs_part2: str = "MDS_UPDRS_Part_II.csv"
-    updrs_part3: str = "MDS_UPDRS_Part_III.csv"
-    updrs_part4: str = "MDS_UPDRS_Part_IV.csv"
-    moca: str = "Montreal_Cognitive_Assessment.csv"
+    updrs_part1: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_I_14Dec2025.csv"
+    updrs_part2: str = "Motor___MDS-UPDRS/MDS_UPDRS_Part_II__Patient_Questionnaire_14Dec2025.csv"
+    updrs_part3: str = "Motor___MDS-UPDRS/MDS_UPDRS_Part_III_14Dec2025.csv"
+    updrs_part4: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_IV__Motor_Complications_14Dec2025.csv"
+    moca: str = "Non-motor_Assessments/Montreal_Cognitive_Assessment__MoCA__14Dec2025.csv"
     
-    # Output paths
-    processed_data_dir: str = "../data/processed"
-    model_save_dir: str = "../models/checkpoints"
-    results_dir: str = "../results"
+    # Output paths (relative to V1_implementation directory)
+    processed_data_dir: str = "data/processed"
+    model_save_dir: str = "models/checkpoints"
+    results_dir: str = "results"
 
 
 # Create default configs

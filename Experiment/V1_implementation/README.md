@@ -38,7 +38,7 @@ A simplified, production-ready deep learning model for PD progression prediction
 | **Medication-Aware** | Explicit ON/OFF status and LEDD as features |
 | **Missingness Handling** | Built-in masks for each modality |
 | **Time-Aware** | Continuous time encoding (actual months, not indices) |
-| **Dual Objectives** | Predicts next-visit NP3TOT + patient-level progression slope |
+| **Multi-Objective** | Predicts next-visit UPDRS totals (NP1TOT, NP2TOT, NP3TOT, NP4TOT) + patient-level progression slopes |
 
 ---
 
@@ -111,7 +111,9 @@ V1 is a **strategic simplification** of a more complex architecture. The goal is
 ┌─────────────────────────┐     ┌─────────────────────────┐
 │   NEXT-VISIT HEAD       │     │   SLOPE HEAD            │
 │   Input: h_t            │     │   Input: pool(H)        │
-│   Output: NP3TOT_{t+1}  │     │   Output: slope         │
+│   Output: UPDRS totals  │     │   Output: slopes        │
+│   (NP1TOT, NP2TOT,      │     │   (NP1TOT, NP2TOT,      │
+│    NP3TOT, NP4TOT)      │     │    NP3TOT, NP4TOT)      │
 │   Loss: MSE             │     │   Loss: MSE             │
 └─────────────────────────┘     └─────────────────────────┘
 
@@ -307,14 +309,18 @@ time_encoding = SinusoidalEncoding(months_since_baseline)
 
 **Next-Visit Head:**
 - Input: Hidden state at time t
-- Output: Predicted NP3TOT at t+1
-- Loss: MSE
+- Output: Predicted UPDRS totals at t+1
+  - NP1TOT (non-motor experiences, 0-52)
+  - NP2TOT (motor ADL, 0-52)
+  - NP3TOT (motor examination, 0-132)
+  - NP4TOT (motor complications, 0-24)
+- Loss: MSE (summed across all totals)
 
 **Slope Head:**
 - Input: Pooled sequence representation
-- Output: Patient-level progression slope
-- Target: Empirical slope from ≥3 visits
-- Loss: MSE
+- Output: Patient-level progression slopes for each UPDRS total
+- Target: Empirical slopes computed from ≥3 visits (linear regression per total)
+- Loss: MSE (summed across all totals)
 
 ---
 
@@ -363,9 +369,10 @@ trainer.train(max_epochs=100, early_stopping_patience=15)
 
 | Metric | Target | Interpretation |
 |--------|--------|----------------|
-| Next-visit MAE | < 5 points | On NP3TOT (0-132 scale) |
-| Slope correlation | r > 0.5 | With empirical slopes |
-| ON vs OFF gap | 5-10 points | Medication effect captured |
+| Next-visit MAE | < 5 points | On NP3TOT (primary outcome, 0-132 scale) |
+| Next-visit MAE | < 3 points | On NP1TOT, NP2TOT, NP4TOT (0-52, 0-24 scales) |
+| Slope correlation | r > 0.5 | With empirical slopes (NP3TOT most important) |
+| ON vs OFF gap | 5-10 points | NP3TOT medication effect (NP2TOT also shows effect) |
 
 ---
 
@@ -402,7 +409,7 @@ class ModelConfig:
     n_layers: int = 4
     dropout: float = 0.1
     max_seq_len: int = 20
-    predict_totals: List[str] = ['NP3TOT']  # What to predict
+    predict_totals: List[str] = ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']  # All UPDRS totals
 ```
 
 ### Data Configuration
@@ -431,17 +438,23 @@ The MDS-UPDRS has **4 parts**, each with its own total score:
 
 | Part | ON vs OFF Difference | Notes |
 |------|---------------------|-------|
-| Part I | Minimal (~0-2 pts) | Non-dopaminergic |
-| Part II | Moderate (~5-10 pts) | Patient-reported |
-| Part III | **Large (~10-20 pts)** | Main outcome |
-| Part IV | N/A | These ARE medication effects |
+| Part I (NP1TOT) | Minimal (~0-2 pts) | Non-dopaminergic symptoms |
+| Part II (NP2TOT) | Moderate (~5-10 pts) | Patient-reported motor ADL |
+| Part III (NP3TOT) | **Large (~10-20 pts)** | Main progression outcome, clinician-observed |
+| Part IV (NP4TOT) | N/A | These ARE medication complications |
 
-### Recommendation
+### V1 Implementation
 
-Start with predicting **NP3TOT only** (default). It's:
-- Most widely used progression outcome
-- Clinician-observed (standardized)
-- Most medication-sensitive
+V1 predicts **all four UPDRS totals**:
+- **NP1TOT**: Non-motor experiences (baseline + progression)
+- **NP2TOT**: Motor activities of daily living (patient perspective)
+- **NP3TOT**: Motor examination (primary outcome, clinician-observed)
+- **NP4TOT**: Motor complications (medication-related)
+
+This comprehensive approach captures:
+- Multi-domain progression (motor, non-motor, complications)
+- Different perspectives (patient-reported vs clinician-observed)
+- Medication effects (especially in NP3TOT and NP4TOT)
 
 ---
 

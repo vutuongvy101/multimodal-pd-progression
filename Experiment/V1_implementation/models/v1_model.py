@@ -63,32 +63,38 @@ class V1MultimodalTransformer(nn.Module):
         
         d_model = model_config.d_model
         
+        # Get MLP dimensions (auto-calculated if not explicitly set)
+        static_mlp_dims = model_config.get_mlp_dims(feature_config, 'static')
+        motor_mlp_dims = model_config.get_mlp_dims(feature_config, 'part3')  # motor uses part3
+        nonmotor_mlp_dims = model_config.get_mlp_dims(feature_config, 'part1')  # nonmotor uses part1
+        med_mlp_dims = model_config.get_mlp_dims(feature_config, 'med')
+        
         # 1. Modality embeddings
         self.static_embedding = StaticFeatureEmbedding(
             n_static,
             d_model,
-            model_config.static_mlp_dims,
+            static_mlp_dims,
             model_config.dropout
         )
         
         self.motor_embedding = VisitFeatureEmbedding(
             n_motor,
             d_model,
-            model_config.motor_mlp_dims,
+            motor_mlp_dims,
             model_config.dropout
         )
         
         self.nonmotor_embedding = VisitFeatureEmbedding(
             n_nonmotor,
             d_model,
-            model_config.nonmotor_mlp_dims,
+            nonmotor_mlp_dims,
             model_config.dropout
         )
         
         self.med_embedding = VisitFeatureEmbedding(
             n_med,
             d_model,
-            model_config.med_mlp_dims,
+            med_mlp_dims,
             model_config.dropout
         )
         

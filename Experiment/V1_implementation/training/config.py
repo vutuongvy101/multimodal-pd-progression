@@ -3,24 +3,42 @@ Configuration for V1 Multimodal Longitudinal Transformer
 """
 
 from dataclasses import dataclass, field
-from typing import List
-
+from typing import List, Optional
+import torch
 
 @dataclass
 class FeatureConfig:
     """Configuration for feature groups"""
     
     # Static features (genetics + demographics)
-    static_features: List[str] = field(default_factory=lambda: [
-        # Genetics
+    monogenic_variants_features: List[str] = field(default_factory=lambda: [
+        'LRRK2', 'GBA', 'SNCA', 'PRKN', 'APOE', 'PATHVAR_COUNT', 'VAR_GENE'
+    ])
+    polygenic_features: List[str] = field(default_factory=lambda: [
         'GP2_PGS', 'META5_PGS', 'META5_excl_LRRK2_GBA_PGS',
-        'LRRK2', 'GBA', 'SNCA', 'PRKN', 'PATHVAR_COUNT',
+    ])
+    genetic_principal_components_features: List[str] = field(default_factory=lambda: [
         'Genetic_PRS_PC1', 'Genetic_PRS_PC2', 'Genetic_PRS_PC3', 'Genetic_PRS_PC4', 'Genetic_PRS_PC5',
         'Genetic_PRS_PC6', 'Genetic_PRS_PC7', 'Genetic_PRS_PC8', 'Genetic_PRS_PC9', 'Genetic_PRS_PC10',
-        'APOE',
-        # Demographics
+    ])
+    
+    demographics_features: List[str] = field(default_factory=lambda: [
         'SEX', 'RACE', 'EDUCYRS', 'ENROLL_AGE'
     ])
+    
+    @property
+    def genetics_features(self) -> List[str]:
+        """Combined genetics features"""
+        return (
+            self.monogenic_variants_features +
+            self.polygenic_features +
+            self.genetic_principal_components_features
+        )
+    
+    @property
+    def static_features(self) -> List[str]:
+        """Combined static features (genetics + demographics)"""
+        return self.genetics_features + self.demographics_features
     
     # Part I - Non-motor experiences of daily living
     part1_features: List[str] = field(default_factory=lambda: [
@@ -71,8 +89,13 @@ class FeatureConfig:
     # Convenience groupings for backward compatibility
     @property
     def motor_features(self) -> List[str]:
-        """Combined motor features (Parts II + III)"""
-        return self.part2_features + self.part3_features
+        """Combined motor features (Parts II + III + IV)
+        
+        Part II: Motor experiences of daily living (patient-reported)
+        Part III: Motor examination (clinician-observed)
+        Part IV: Motor complications (dyskinesia, OFF time, fluctuations, dystonia)
+        """
+        return self.part2_features + self.part3_features + self.part4_features
     
     @property
     def nonmotor_features(self) -> List[str]:
@@ -83,6 +106,50 @@ class FeatureConfig:
     def all_updrs_totals(self) -> List[str]:
         """All UPDRS total scores"""
         return ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']
+
+
+def calculate_mlp_dims(n_features: int, d_model: int = 256, 
+                       min_hidden: int = 64, max_hidden: int = 256) -> List[int]:
+    """
+    Dynamically calculate MLP dimensions based on number of features.
+    
+    Strategy:
+    - Input dimension = n_features * 2 (values + missing masks)
+    - First hidden layer: scales with input size
+      * Small inputs (< 30): use min_hidden (64)
+      * Medium inputs (30-50): use 128
+      * Large inputs (> 50): use max_hidden (256) or 128
+    - Second hidden layer: always d_model for transformer compatibility
+    
+    Args:
+        n_features: Number of input features
+        d_model: Output embedding dimension (default: 256)
+        min_hidden: Minimum hidden layer size (default: 64)
+        max_hidden: Maximum hidden layer size (default: 256)
+    
+    Returns:
+        List of hidden layer dimensions [first_hidden, d_model]
+    
+    Examples:
+        >>> calculate_mlp_dims(14)  # Small modality
+        [64, 256]
+        >>> calculate_mlp_dims(33)  # Large modality
+        [128, 256]
+        >>> calculate_mlp_dims(50)  # Very large
+        [128, 256]
+    """
+    input_dim = n_features * 2  # values + masks
+    
+    # Determine first hidden layer size
+    if input_dim < 30:
+        first_hidden = min_hidden  # 64
+    elif input_dim < 50:
+        first_hidden = 128
+    else:
+        # For very large inputs, use 128 or max_hidden
+        first_hidden = min(128, max_hidden)
+    
+    return [first_hidden, d_model]
 
 
 @dataclass
@@ -100,22 +167,72 @@ class ModelConfig:
     activation: str = 'gelu'
     
     # Modality MLP dimensions
-    static_mlp_dims: List[int] = field(default_factory=lambda: [128, 256])
-    part1_mlp_dims: List[int] = field(default_factory=lambda: [64, 256])    # Non-motor
-    part2_mlp_dims: List[int] = field(default_factory=lambda: [64, 256])    # Motor ADL
-    part3_mlp_dims: List[int] = field(default_factory=lambda: [128, 256])   # Motor exam (largest)
-    part4_mlp_dims: List[int] = field(default_factory=lambda: [64, 256])    # Complications
-    med_mlp_dims: List[int] = field(default_factory=lambda: [64, 256])      # Medication context
-    other_mlp_dims: List[int] = field(default_factory=lambda: [64, 256])    # Other assessments
+    # Set to None to auto-calculate from feature counts, or provide explicit dimensions
+    # Auto-calculation uses: calculate_mlp_dims(n_features, d_model)
+    #   - Small inputs (<30): [64, 256]
+    #   - Medium inputs (30-50): [128, 256]  
+    #   - Large inputs (>50): [128, 256]
+    # 
+    # Example: To override auto-calculation for static features:
+    #   static_mlp_dims = [256, 512]  # Custom larger MLP
+    static_mlp_dims: Optional[List[int]] = None
+    part1_mlp_dims: Optional[List[int]] = None
+    part2_mlp_dims: Optional[List[int]] = None
+    part3_mlp_dims: Optional[List[int]] = None
+    part4_mlp_dims: Optional[List[int]] = None
+    med_mlp_dims: Optional[List[int]] = None
+    other_mlp_dims: Optional[List[int]] = None
     
-    # Backward compatibility
-    @property
-    def motor_mlp_dims(self) -> List[int]:
-        return self.part3_mlp_dims
+    def get_mlp_dims(self, feature_config: 'FeatureConfig', modality: str) -> List[int]:
+        """
+        Get MLP dimensions for a modality, auto-calculating if not explicitly set.
+        
+        Args:
+            feature_config: FeatureConfig instance to get feature counts
+            modality: One of 'static', 'part1', 'part2', 'part3', 'part4', 'med', 'other'
+        
+        Returns:
+            List of MLP hidden layer dimensions
+        """
+        # Map modality names to config attributes and feature lists
+        modality_map = {
+            'static': ('static_mlp_dims', feature_config.static_features),
+            'part1': ('part1_mlp_dims', feature_config.part1_features),
+            'part2': ('part2_mlp_dims', feature_config.part2_features),
+            'part3': ('part3_mlp_dims', feature_config.part3_features),
+            'part4': ('part4_mlp_dims', feature_config.part4_features),
+            'med': ('med_mlp_dims', feature_config.medication_features),
+            'other': ('other_mlp_dims', feature_config.other_nonmotor_features),
+        }
+        
+        if modality not in modality_map:
+            raise ValueError(f"Unknown modality: {modality}. Must be one of {list(modality_map.keys())}")
+        
+        attr_name, feature_list = modality_map[modality]
+        explicit_dims = getattr(self, attr_name)
+        
+        # If explicitly set, use it
+        if explicit_dims is not None:
+            return explicit_dims
+        
+        # Otherwise, auto-calculate from feature count
+        n_features = len(feature_list)
+        return calculate_mlp_dims(n_features, self.d_model)
     
-    @property
-    def nonmotor_mlp_dims(self) -> List[int]:
-        return self.part1_mlp_dims
+    # Backward compatibility (requires feature_config to be passed)
+    def motor_mlp_dims(self, feature_config: Optional['FeatureConfig'] = None) -> List[int]:
+        """Get motor MLP dims (uses part3)"""
+        if feature_config is None:
+            # Fallback to explicit value or default
+            return self.part3_mlp_dims if self.part3_mlp_dims is not None else [128, 256]
+        return self.get_mlp_dims(feature_config, 'part3')
+    
+    def nonmotor_mlp_dims(self, feature_config: Optional['FeatureConfig'] = None) -> List[int]:
+        """Get non-motor MLP dims (uses part1)"""
+        if feature_config is None:
+            # Fallback to explicit value or default
+            return self.part1_mlp_dims if self.part1_mlp_dims is not None else [64, 256]
+        return self.get_mlp_dims(feature_config, 'part1')
     
     # Prediction targets
     predict_totals: List[str] = field(default_factory=lambda: ['NP3TOT'])  
@@ -130,6 +247,16 @@ class ModelConfig:
     
     # Sequence handling
     max_seq_len: int = 20
+
+
+def get_device() -> str:
+    """Dynamically detect and return the best available device"""
+    if torch.cuda.is_available():
+        return 'cuda'
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        return 'mps'
+    else:
+        return 'cpu'
 
 
 @dataclass
@@ -158,8 +285,8 @@ class TrainingConfig:
     log_every_n_steps: int = 10
     validate_every_n_epochs: int = 1
     
-    # Device
-    device: str = 'cuda'  # or 'cpu', 'mps' for Mac
+    # Device (automatically detected: 'cuda', 'mps' for Mac, or 'cpu')
+    device: str = field(default_factory=get_device)
 
 
 @dataclass
@@ -223,6 +350,21 @@ if __name__ == "__main__":
     print(f"n_heads: {config['model'].n_heads}")
     print(f"n_layers: {config['model'].n_layers}")
     print(f"max_seq_len: {config['model'].max_seq_len}")
+    
+    print("\n--- MLP Dimensions (Auto-calculated) ---")
+    modality_map = {
+        'static': 'static_features',
+        'part1': 'part1_features',
+        'part2': 'part2_features',
+        'part3': 'part3_features',
+        'part4': 'part4_features',
+        'med': 'medication_features',
+        'other': 'other_nonmotor_features',
+    }
+    for mod, attr_name in modality_map.items():
+        n_features = len(getattr(config['features'], attr_name))
+        mlp_dims = config['model'].get_mlp_dims(config['features'], mod)
+        print(f"{mod:8s}: {n_features:3d} features → {mlp_dims}")
     
     print("\n--- Training Configuration ---")
     print(f"batch_size: {config['training'].batch_size}")

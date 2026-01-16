@@ -510,7 +510,7 @@ python training/config.py
 
 ### Run Data Integration
 ```bash
-cd data && python data_integrator.py
+python data/data_integrator.py
 ```
 
 ### Train Model

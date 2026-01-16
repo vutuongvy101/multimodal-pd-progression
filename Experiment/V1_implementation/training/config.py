@@ -167,7 +167,7 @@ class DataConfig:
     """Configuration for data paths"""
     
     # Base directory
-    base_dir: str = "../../../ppmi_pd"
+    base_dir: str = "../../ppmi_pd"
     
     # Input files
     participant_status: str = "Participant_Status_14Dec2025.csv"

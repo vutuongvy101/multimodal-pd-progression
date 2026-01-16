@@ -298,6 +298,11 @@ class DataConfig:
     
     # Input files
     participant_status: str = "Participant_Status_14Dec2025.csv"
+    demographics: str = "Demographics_14Dec2025.csv"
+    family_history: str = "Family_History_14Dec2025.csv"
+    socio_economic: str = "Socioeconomic_Status_14Dec2025.csv"
+    age_at_visit: str = "Age_at_Visit_14Dec2025.csv"
+
     # Genetics files (relative to base_dir)
     genetic_consensus: str = "Genetic_Status/iu_genetic_consensus_20251025_14Dec2025.csv"
     prs_scores: str = "Genetic_Status/Polygenic_Risk_Scores_14Dec2025.csv"

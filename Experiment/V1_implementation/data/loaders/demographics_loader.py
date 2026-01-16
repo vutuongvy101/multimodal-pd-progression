@@ -20,7 +20,17 @@ from base_loader import StaticDataLoader
 class DemographicsLoader(StaticDataLoader):
     """
     Loads demographics from Participant_Status and other demographic files
-    Includes: PATNO, SEX, RACE, EDUCYRS, ENROLL_AGE, family history
+    Includes: 'PATNO', 'ENROLL_AGE', 'SEX', 'HANDED', 'EDUCYRS',
+        'AFICBERB', 'ASHKJEW', 'BASQUE',
+        'HOWLIVE', 'GAYLES', 'HETERO', 'BISEXUAL', 'PANSEXUAL', 'ASEXUAL', 'OTHSEXUALITY',
+        'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN', 
+        'ANYFAMPD', 'BIOMOM', 'BIOMOMPD', 'BIODAD', 'BIODADPD',
+        'FULSIB', 'FULBRO', 'FULSIS', 'FULSIBPD', 'FULBROPD', 'FULSISPD',
+        'HAFSIB', 'PAHAFSIB', 'MAHAFSIB', 'HAFSIBPD', 'MAHAFSIBPD',
+        'PAHAFSIBPD', 'MAGPAR', 'MAGPARPD', 'MAGFATHPD', 'MAGMOTHPD', 'PAGPAR',
+        'PAGPARPD', 'PAGFATHPD', 'PAGMOTHPD', 'MATAU', 'MATAUPD', 'PATAU',
+        'PATAUPD', 'KIDSNUM', 'KIDSPD', 'DISFAMPD', 'MATCOUS', 'MATCOUSPD',
+        'PATCOUS', 'PATCOUSPD']
     """
     
     def __init__(self, base_dir: str, config: dict):
@@ -31,6 +41,51 @@ class DemographicsLoader(StaticDataLoader):
         """
         super().__init__(base_dir)
         self.config = config
+
+    def __filter_valid_participants__(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Filter valid participants from participant_status DataFrame"""
+
+        # Remove participants with null ENROLL_DATE
+        df = df.dropna(subset=['ENROLL_DATE'])
+
+        # Keep only participants with valid enrollment status
+        valid_statuses = [
+            'Complete', 
+            'Enrolled', 
+            'Withdraw Deceased', 
+            'Withdrew'
+        ]
+        df = df[df['ENROLL_STATUS'].isin(valid_statuses)]
+
+        # Exclude SWEDD cohort
+        valid_cohorts = [
+            'Healthy Control', 
+            "Parkinson's Disease", 
+            'Prodromal'
+        ]
+        df = df[df['COHORT_DEFINITION'].isin(valid_cohorts)]
+
+        # # Renumber cohorts: 1=PD, 2=HC, 3=Prodromal
+        # cohort_mapping = {
+        #     "Parkinson's Disease": 1,
+        #     'Healthy Control': 2,
+        #     'Prodromal': 3
+        # }
+        # df['COHORT'] = df['COHORT_DEFINITION'].map(cohort_mapping)
+    
+        # Reset index for a clean dataframe
+        df.reset_index(drop=True, inplace=True)
+
+        # Select only certain columns for final output
+        df = df[[
+            'PATNO', 
+            'COHORT', 
+            'COHORT_DEFINITION', 
+            'ENROLL_STATUS',
+            'ENROLL_AGE',
+        ]].copy()
+
+        return df
         
     def load(self) -> pd.DataFrame:
         """
@@ -54,13 +109,34 @@ class DemographicsLoader(StaticDataLoader):
             raise FileNotFoundError(f"Participant status file not found: {status_path}\n"
                                   f"  Checked: {os.path.abspath(status_path)}")
         df = pd.read_csv(status_path)
-        
+
+        df = self.__filter_valid_participants__(df)
+
         # Select relevant columns
-        demo_cols = ['PATNO', 'ENROLL_AGE', 'COHORT', 'COHORT_DEFINITION']
+        demo_cols = ['PATNO', 'ENROLL_AGE', 'SEX', 'COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS']
         
         # Add optional columns if they exist
-        optional_cols = ['SEX', 'RACE', 'EDUCYRS', 'ENROLL_STATUS', 
-                        'ENRLHPSM', 'ENRLRBD', 'ENRLLRRK2', 'ENRLSNCA', 'ENRLGBA']
+        optional_cols = [   'HANDED', 
+                            # Descent    
+                            'AFICBERB', 'ASHKJEW', 'BASQUE', 
+                            # Sexuality
+                            'HOWLIVE', 'GAYLES', 'HETERO', 'BISEXUAL', 'PANSEXUAL', 'ASEXUAL', 'OTHSEXUALITY', 
+                            # Ethnicity/Race
+                            'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN', 
+                            'ANYFAMPD', 
+                            # 1st degree family
+                            'BIOMOM', 'BIOMOMPD', 'BIODAD', 'BIODADPD',
+                            'FULSIB', 'FULBRO', 'FULSIS', 'FULSIBPD', 'FULBROPD', 'FULSISPD',
+                            # 2nd degree family
+                            'HAFSIB', 'PAHAFSIB', 'MAHAFSIB', 'HAFSIBPD', 'MAHAFSIBPD',
+                            'PAHAFSIBPD', 'MAGPAR', 'MAGPARPD', 'MAGFATHPD', 'MAGMOTHPD', 'PAGPAR',
+                            'PAGPARPD', 'PAGFATHPD', 'PAGMOTHPD', 'MATAU', 'MATAUPD', 'PATAU',
+                            'PATAUPD', 'KIDSNUM', 'KIDSPD', 'DISFAMPD', 'MATCOUS', 'MATCOUSPD',
+                            'PATCOUS', 'PATCOUSPD',
+                            # Education years
+                            'EDUCYRS'
+        ]
+
         for col in optional_cols:
             if col in df.columns:
                 demo_cols.append(col)
@@ -68,24 +144,27 @@ class DemographicsLoader(StaticDataLoader):
         df = df[demo_cols].copy()
         
         # Process categorical variables
+        if 'COHORT' in df.columns:
+            # 1=PD, 2=HC, 3=Prodromal
+            df['COHORT'] = pd.to_numeric(df['COHORT'], errors='coerce')
+
         if 'SEX' in df.columns:
             # Encode sex (assuming 0=female, 1=male or similar)
             df['SEX'] = pd.to_numeric(df['SEX'], errors='coerce')
         
-        if 'RACE' in df.columns:
-            # Encode race as numeric
-            df['RACE'] = pd.to_numeric(df['RACE'], errors='coerce')
+        # all attributes in optional_cols are binary (0/1) or numeric, so convert them
+        for col in optional_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        if 'COHORT' in df.columns:
-            # 1=PD, 2=HC, 3=SWEDD, etc.
-            df['COHORT'] = pd.to_numeric(df['COHORT'], errors='coerce')
+
         
         # TODO: Add family history if available from separate file
         
         print(f"✓ Loaded demographics: {len(df)} patients, {len(df.columns)-1} features")
         
         return df
-    
+
     def get_required_columns(self) -> List[str]:
         """Required columns in output"""
         return [
@@ -93,7 +172,8 @@ class DemographicsLoader(StaticDataLoader):
             'ENROLL_AGE',
             'SEX',
             'COHORT',
-            'COHORT_DEFINITION'
+            'COHORT_DEFINITION',
+            'ENROLL_STATUS'
         ]
     
     def validate(self, df: pd.DataFrame) -> bool:

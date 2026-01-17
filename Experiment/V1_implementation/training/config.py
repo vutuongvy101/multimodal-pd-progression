@@ -23,7 +23,29 @@ class FeatureConfig:
     ])
     
     demographics_features: List[str] = field(default_factory=lambda: [
-        'SEX', 'RACE', 'EDUCYRS', 'ENROLL_AGE'
+        # Education years
+        'EDUCYRS',
+        # Demographics
+        'SEX', 'HANDED', 
+        # Descent    
+        'AFICBERB', 'ASHKJEW', 'BASQUE', 
+        # Sexuality
+        'HOWLIVE', 'GAYLES', 'HETERO', 'BISEXUAL', 'PANSEXUAL', 'ASEXUAL', 'OTHSEXUALITY', 
+        # Ethnicity/Race
+        'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN', 
+        # Family history
+        'ANYFAMPD', 
+        # 1st degree family
+        'BIOMOM', 'BIOMOMPD', 'BIODAD', 'BIODADPD',
+        'FULSIB', 'FULBRO', 'FULSIS', 'FULSIBPD', 'FULBROPD', 'FULSISPD', 
+        'KIDSPD',
+        # 2nd degree family
+        'HAFSIB', 'PAHAFSIB', 'MAHAFSIB', 'HAFSIBPD', 'MAHAFSIBPD',
+        'PAHAFSIBPD', 'MAGPAR', 'MAGPARPD', 'MAGFATHPD', 'MAGMOTHPD', 'PAGPAR',
+        'PAGPARPD', 'PAGFATHPD', 'PAGMOTHPD', 'MATAU', 'MATAUPD', 'PATAU',
+        'PATAUPD', 'MATCOUS', 'MATCOUSPD',
+        'PATCOUS', 'PATCOUSPD',
+        'DISFAMPD'
     ])
     
     @property
@@ -300,7 +322,7 @@ class DataConfig:
     participant_status: str = "Participant_Status_14Dec2025.csv"
     demographics: str = "Subject_Demographics/Demographics_14Dec2025.csv"
     family_history: str = "Family_History_14Dec2025.csv"
-    socio_economic: str = "Subject_Demographics/Socioeconomic_Status_14Dec2025.csv"
+    socio_economic: str = "Subject_Demographics/Socio-Economics_14Dec2025.csv"
     age_at_visit: str = "Subject_Demographics/Age_at_Visit_14Dec2025.csv"
 
     # Genetics files (relative to base_dir)

@@ -22,6 +22,7 @@ try:
     from data.loaders.updrs_loader import UPDRSLoader
     from data.loaders.clinical_loader import ClinicalAssessmentsLoader
     from data.loaders.medication_loader import MedicationLoader
+    from data.loaders.age_at_visit_loader import AgeAtVisitLoader
 except ImportError:
     # Fall back to direct imports if running from data/ directory
     from loaders.genetics_loader import GeneticsLoader
@@ -29,6 +30,7 @@ except ImportError:
     from loaders.updrs_loader import UPDRSLoader
     from loaders.clinical_loader import ClinicalAssessmentsLoader
     from loaders.medication_loader import MedicationLoader
+    from loaders.age_at_visit_loader import AgeAtVisitLoader
 
 
 class DataIntegrator:
@@ -45,13 +47,70 @@ class DataIntegrator:
         self.config = config
         self.base_dir = config.data.base_dir
         
-        # Initialize all loaders
-        print("Initializing loaders...")
-        self.genetics_loader = GeneticsLoader(self.base_dir, config)
-        self.demographics_loader = DemographicsLoader(self.base_dir, config)
-        self.updrs_loader = UPDRSLoader(self.base_dir, config)
-        self.clinical_loader = ClinicalAssessmentsLoader(self.base_dir, config)
-        self.medication_loader = MedicationLoader(self.base_dir, config)
+        # Load participant_status once and share across all loaders
+        print("Loading participant status (shared across all loaders)...")
+        self.valid_participants = self._load_valid_participants(config)
+        print(f"  ✓ Loaded {len(self.valid_participants)} valid participants")
+        
+        # Initialize all loaders with shared valid_participants
+        print("\nInitializing loaders...")
+        self.genetics_loader = GeneticsLoader(self.base_dir, config, valid_participants=self.valid_participants)
+        self.demographics_loader = DemographicsLoader(self.base_dir, config, valid_participants=self.valid_participants)
+        self.updrs_loader = UPDRSLoader(self.base_dir, config, valid_participants=self.valid_participants)
+        self.clinical_loader = ClinicalAssessmentsLoader(self.base_dir, config, valid_participants=self.valid_participants)
+        self.medication_loader = MedicationLoader(self.base_dir, config, valid_participants=self.valid_participants)
+        self.age_at_visit_loader = AgeAtVisitLoader(self.base_dir, config, valid_participants=self.valid_participants)
+    
+    def _load_valid_participants(self, config) -> pd.DataFrame:
+        """
+        Load and filter participant_status once.
+        This DataFrame is shared across all loaders to avoid multiple file loads.
+        
+        Returns:
+            DataFrame with filtered valid participants
+        """
+        import os
+        
+        def resolve_path(file_path):
+            """Resolve file path, handling relative paths that start with ../"""
+            if os.path.isabs(file_path):
+                return file_path
+            if file_path.startswith('../'):
+                return os.path.normpath(os.path.abspath(file_path))
+            return os.path.normpath(os.path.join(self.base_dir, file_path))
+        
+        # Load participant status
+        status_path = resolve_path(config.data.participant_status)
+        if not os.path.exists(status_path):
+            raise FileNotFoundError(f"Participant status file not found: {status_path}\n"
+                                  f"  Checked: {os.path.abspath(status_path)}")
+        df = pd.read_csv(status_path)
+        
+        # Filter valid participants (same logic as BaseDataLoader._filter_valid_participants)
+        # Remove participants with null ENROLL_DATE
+        df = df.dropna(subset=['ENROLL_DATE'])
+
+        # Keep only participants with valid enrollment status
+        valid_statuses = [
+            'Complete', 
+            'Enrolled', 
+            'Withdraw Deceased', 
+            'Withdrew'
+        ]
+        df = df[df['ENROLL_STATUS'].isin(valid_statuses)]
+
+        # Exclude SWEDD cohort
+        valid_cohorts = [
+            'Healthy Control', 
+            "Parkinson's Disease", 
+            'Prodromal'
+        ]
+        df = df[df['COHORT_DEFINITION'].isin(valid_cohorts)]
+    
+        # Reset index for a clean dataframe
+        df.reset_index(drop=True, inplace=True)
+        
+        return df
         
     def load_all_data(self) -> Dict[str, pd.DataFrame]:
         """
@@ -89,6 +148,12 @@ class DataIntegrator:
             print("  ⚠️  Medication data not available, continuing without it")
             medication_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
         
+        try:
+            age_at_visit_df = self.age_at_visit_loader.load()
+        except:
+            print("  ⚠️  Age at visit data not available, continuing without it")
+            age_at_visit_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
+        
         # Merge longitudinal data
         longitudinal_df = updrs_df.copy()
         
@@ -118,6 +183,19 @@ class DataIntegrator:
                     longitudinal_df['months_since_baseline_med']
                 )
                 longitudinal_df = longitudinal_df.drop('months_since_baseline_med', axis=1)
+        
+        if len(age_at_visit_df) > 0:
+            longitudinal_df = longitudinal_df.merge(
+                age_at_visit_df, 
+                on=['PATNO', 'EVENT_ID'], 
+                how='outer',
+                suffixes=('', '_age')
+            )
+            if 'months_since_baseline_age' in longitudinal_df.columns:
+                longitudinal_df['months_since_baseline'] = longitudinal_df['months_since_baseline'].fillna(
+                    longitudinal_df['months_since_baseline_age']
+                )
+                longitudinal_df = longitudinal_df.drop('months_since_baseline_age', axis=1)
         
         print(f"\n✓ Longitudinal data merged: {len(longitudinal_df)} visits, {len(longitudinal_df.columns)-3} features")
         print(f"  Visits per patient: {len(longitudinal_df) / longitudinal_df['PATNO'].nunique():.1f} average")
@@ -153,12 +231,19 @@ class DataIntegrator:
             slope_entry = {'PATNO': patno, 'n_visits': len(valid_group)}
             
             # Compute slope for each UPDRS total
-            for total in ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']:
+            for total in self.config.features.all_updrs_totals:
                 if total in valid_group.columns:
                     scores = valid_group[total].dropna()
                     times_for_total = valid_group.loc[scores.index, 'months_since_baseline'].values
                     
                     if len(scores) >= min_visits:
+                        # Check that we have at least 2 unique time points for regression
+                        # Skip if all times are identical (variance is zero)
+                        times_std = pd.Series(times_for_total).std()
+                        if pd.isna(times_std) or times_std == 0:
+                            # Skip if all visits are at the same time point (cannot compute slope)
+                            continue
+                        
                         result = linregress(times_for_total, scores.values)
                         slope_entry[f'{total}_slope'] = result.slope
                         slope_entry[f'{total}_r'] = result.rvalue
@@ -170,7 +255,7 @@ class DataIntegrator:
         slopes_df = pd.DataFrame(slopes_data)
         
         print(f"✓ Computed slopes for {len(slopes_df)} patients")
-        for total in ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']:
+        for total in self.config.features.all_updrs_totals:
             slope_col = f'{total}_slope'
             if slope_col in slopes_df.columns:
                 n_slopes = slopes_df[slope_col].notna().sum()
@@ -218,7 +303,7 @@ class DataIntegrator:
             'static_features': [c for c in data['static'].columns if c != 'PATNO'],
             'longitudinal_features': [c for c in data['longitudinal'].columns 
                                      if c not in ['PATNO', 'EVENT_ID', 'INFODT', 'visit_date']],
-            'updrs_totals': [c for c in data['longitudinal'].columns if c in ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']]
+            'updrs_totals': [c for c in data['longitudinal'].columns if c in self.config.features.all_updrs_totals]
         }
         
         print("\n" + "=" * 80)

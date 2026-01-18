@@ -20,14 +20,15 @@ class UPDRSLoader(LongitudinalDataLoader):
     - Part IV: Motor complications (NP4*)
     """
     
-    def __init__(self, base_dir: str, config: DataConfig):
+    def __init__(self, base_dir: str, config: DataConfig, valid_participants=None):
         """
         Args:
             base_dir: Base directory for data files
             config: Configuration dict with file paths
+            valid_participants: Optional pre-filtered participant DataFrame (shared across loaders)
         """
-        super().__init__(base_dir)
-        self.config = config
+        super().__init__(base_dir, config, valid_participants=valid_participants)
+        # config is now stored in base class as self.config - no need to store again
         
     def load(self) -> pd.DataFrame:
         """
@@ -41,40 +42,46 @@ class UPDRSLoader(LongitudinalDataLoader):
         part2_df = None
         part3_df = None
         part4_df = None
-        
-        # Load Part I (Non-motor)
+
+        # Load Part I (Non-motor Questions)
         try:
-            part1_path = f"{self.base_dir}/{self.config.data.updrs_part1}"
+            part1_path = self.resolve_path(self.config.data.updrs_part1_ques)
             print(f"Loading UPDRS Part I from: {part1_path}")
             part1_df = pd.read_csv(part1_path)
-            # Select NP1* columns
-            part1_cols = ['PATNO', 'EVENT_ID', 'INFODT'] + [c for c in part1_df.columns if c.startswith('NP1')]
-            part1_df = part1_df[part1_cols]
-            print(f"  ✓ Part I: {len(part1_df)} visits, {len([c for c in part1_df.columns if c.startswith('NP1')])} features")
+            part1_df = part1_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part1_questionnaire_features]
+            print(f"  ✓ Part I: {len(part1_df)} visits, {len(self.config.features.part1_features)} features")
+        except Exception as e:
+            print(f"  ⚠️  Could not load Part I: {e}")
+
+        # Load Part I (Non-motor UPDRS)
+        try:
+            part1_path = self.resolve_path(self.config.data.updrs_part1)
+            print(f"Loading UPDRS Part I from: {part1_path}")
+            part1_df = pd.read_csv(part1_path)
+            part1_df = part1_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part1_uprs_features]
+            print(f"  ✓ Part I: {len(part1_df)} visits, {len(self.config.features.part1_features)} features")
         except Exception as e:
             print(f"  ⚠️  Could not load Part I: {e}")
         
         # Load Part II (Motor ADL)
         try:
-            part2_path = f"{self.base_dir}/{self.config.data.updrs_part2}"
+            part2_path = self.resolve_path(self.config.data.updrs_part2)
             print(f"Loading UPDRS Part II from: {part2_path}")
             part2_df = pd.read_csv(part2_path)
-            part2_cols = ['PATNO', 'EVENT_ID', 'INFODT'] + [c for c in part2_df.columns if c.startswith('NP2')]
-            part2_df = part2_df[part2_cols]
-            print(f"  ✓ Part II: {len(part2_df)} visits, {len([c for c in part2_df.columns if c.startswith('NP2')])} features")
+            part2_df = part2_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part2_features]
+            print(f"  ✓ Part II: {len(part2_df)} visits, {len(self.config.features.part2_features)} features")
         except Exception as e:
             print(f"  ⚠️  Could not load Part II: {e}")
         
         # Load Part III (Motor Examination)
         try:
-            part3_path = f"{self.base_dir}/{self.config.data.updrs_part3}"
+            part3_path = self.resolve_path(self.config.data.updrs_part3)
             print(f"Loading UPDRS Part III from: {part3_path}")
             part3_df = pd.read_csv(part3_path)
             # Include PDMEDYN (ON/OFF status) if available
-            part3_cols = ['PATNO', 'EVENT_ID', 'INFODT']
+            part3_cols = ['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part3_features
             if 'PDMEDYN' in part3_df.columns:
                 part3_cols.append('PDMEDYN')
-            part3_cols += [c for c in part3_df.columns if c.startswith('NP3')]
             part3_df = part3_df[part3_cols]
             print(f"  ✓ Part III: {len(part3_df)} visits, {len([c for c in part3_df.columns if c.startswith('NP3')])} features")
         except Exception as e:
@@ -82,12 +89,11 @@ class UPDRSLoader(LongitudinalDataLoader):
         
         # Load Part IV (Motor Complications)
         try:
-            part4_path = f"{self.base_dir}/{self.config.data.updrs_part4}"
+            part4_path = self.resolve_path(self.config.data.updrs_part4)
             print(f"Loading UPDRS Part IV from: {part4_path}")
             part4_df = pd.read_csv(part4_path)
-            part4_cols = ['PATNO', 'EVENT_ID', 'INFODT'] + [c for c in part4_df.columns if c.startswith('NP4')]
-            part4_df = part4_df[part4_cols]
-            print(f"  ✓ Part IV: {len(part4_df)} visits, {len([c for c in part4_df.columns if c.startswith('NP4')])} features")
+            part4_df = part4_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part4_features]
+            print(f"  ✓ Part IV: {len(part4_df)} visits, {len(self.config.features.part4_features)} features")
         except Exception as e:
             print(f"  ⚠️  Could not load Part IV: {e}")
         

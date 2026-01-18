@@ -276,42 +276,237 @@ V1_implementation/
 
 ### Overview
 
-Data loading is modularized into **5 independent tasks** that can be developed in parallel:
+The data pipeline uses a **modular loader architecture** with standardized participant filtering. All loaders inherit from base classes that ensure consistent data processing across the pipeline.
 
-| Task | Loader | Data Source | Estimated Time |
-|------|--------|-------------|----------------|
-| 1 | `genetics_loader.py` | Genetics (PRS, variants, PCs) | 30-45 min |
-| 2 | `demographics_loader.py` | Demographics (age, sex, etc.) | 20-30 min |
-| 3 | `updrs_loader.py` | UPDRS Parts I-IV | 45-60 min |
-| 4 | `clinical_loader.py` | MoCA, ESS, SCOPA-AUT | 30-45 min |
-| 5 | `medication_loader.py` | LEDD, medication history | 20-30 min |
+**Key Design Principles:**
+- ✅ **Standardized participant filtering**: All loaders use the same valid participant list from `participant_status`
+- ✅ **Type-based base classes**: `StaticDataLoader` (patient-level) vs `LongitudinalDataLoader` (visit-level)
+- ✅ **Modular design**: Each loader is independent and can be tested separately
+- ✅ **Consistent merge keys**: Static data uses `PATNO`, longitudinal data uses `[PATNO, EVENT_ID]`
 
-### Running Data Pipeline
+### Base Loader Classes
 
-**Individual loader testing:**
-```bash
-cd data/loaders
-python genetics_loader.py      # Test genetics
-python updrs_loader.py         # Test UPDRS
+All loaders inherit from base classes defined in `data/base_loader.py`:
+
+#### `StaticDataLoader` (Patient-Level Data)
+- **Merge key**: `['PATNO']`
+- **Use case**: One row per patient (genetics, demographics)
+- **Examples**: `GeneticsLoader`, `DemographicsLoader`
+
+#### `LongitudinalDataLoader` (Visit-Level Data)
+- **Merge key**: `['PATNO', 'EVENT_ID']`
+- **Use case**: Multiple rows per patient (one per visit)
+- **Helper methods**:
+  - `compute_time_since_baseline()`: Computes `months_since_baseline` from dates or `EVENT_ID`
+  - `filter_by_valid_participants()`: Filters visits to only valid participants
+- **Examples**: `UPDRSLoader`, `ClinicalAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`
+
+#### Standardized Participant Filtering
+
+All loaders use `participant_status` as the source of truth for valid participants:
+
+```python
+# Base class methods available to all loaders:
+self._load_and_filter_participants(config)  # Load and filter participant_status
+self._filter_valid_participants(df)         # Apply filtering logic
 ```
 
-**Full integration:**
+**Filtering criteria**:
+- ✅ Valid enrollment status: `Complete`, `Enrolled`, `Withdraw Deceased`, `Withdrew`
+- ✅ Valid cohorts: `Healthy Control`, `Parkinson's Disease`, `Prodromal` (excludes SWEDD)
+- ✅ Non-null `ENROLL_DATE`
+
+### Individual Loaders
+
+| Loader | Type | Description | Output Columns |
+|--------|------|-------------|----------------|
+| **DemographicsLoader** | Static | Demographics, socioeconomic, family history | `PATNO` + demographics features |
+| **GeneticsLoader** | Static | Genetic consensus, PRS scores, principal components | `PATNO` + genetics features |
+| **UPDRSLoader** | Longitudinal | UPDRS Parts I-IV (motor/non-motor assessments) | `PATNO`, `EVENT_ID`, `months_since_baseline` + UPDRS features |
+| **ClinicalAssessmentsLoader** | Longitudinal | MoCA, ESS, SCOPA-AUT, Schwab & England | `PATNO`, `EVENT_ID`, `months_since_baseline` + clinical scores |
+| **MedicationLoader** | Longitudinal | LEDD, medication history, ON/OFF status | `PATNO`, `EVENT_ID`, `months_since_baseline` + medication features |
+| **AgeAtVisitLoader** | Longitudinal | Age at each visit (varies by visit, not static) | `PATNO`, `EVENT_ID`, `months_since_baseline` + `AGE_AT_VISIT` |
+
+#### Loader Pipeline Steps
+
+**StaticDataLoader pattern** (`DemographicsLoader`, `GeneticsLoader`):
+```python
+1. Load and filter participant_status (using _load_and_filter_participants)
+2. Load domain-specific data files
+3. Merge on PATNO
+4. Return: DataFrame with PATNO + features
+```
+
+**LongitudinalDataLoader pattern** (`UPDRSLoader`, `ClinicalAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`):
+```python
+1. Load domain-specific data files
+2. Filter to valid participants (using filter_by_valid_participants)
+3. Compute months_since_baseline (using compute_time_since_baseline) if INFODT available
+4. Return: DataFrame with PATNO, EVENT_ID, months_since_baseline + features
+```
+
+### Data Integration Pipeline
+
+The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipeline:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 1: Load All Data                                            │
+├─────────────────────────────────────────────────────────────────┤
+│ Static Data:                                                     │
+│   demographics_df = demographics_loader.load()                  │
+│   genetics_df = genetics_loader.load()                           │
+│   → Merge on PATNO → static_df                                   │
+│                                                                  │
+│ Longitudinal Data:                                               │
+│   updrs_df = updrs_loader.load()                                 │
+│   clinical_df = clinical_loader.load()  (optional)              │
+│   medication_df = medication_loader.load() (optional)           │
+│   age_at_visit_df = age_at_visit_loader.load() (optional)       │
+│   → Merge on [PATNO, EVENT_ID] → longitudinal_df                │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 2: Compute Progression Slopes                               │
+├─────────────────────────────────────────────────────────────────┤
+│ For each patient with ≥min_visits visits:                        │
+│   - Fit linear regression: score ~ months_since_baseline        │
+│   - Extract slope for NP1TOT, NP2TOT, NP3TOT, NP4TOT           │
+│ → slopes_df (one row per patient)                                │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 3: Filter to Complete Cases                                 │
+├─────────────────────────────────────────────────────────────────┤
+│ Keep only patients present in BOTH:                              │
+│   - static_df AND longitudinal_df                                │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ OUTPUT: Dictionary with                                          │
+├─────────────────────────────────────────────────────────────────┤
+│ - 'static': Patient-level features                              │
+│ - 'longitudinal': Visit-level features                          │
+│ - 'slopes': Patient-level progression slopes                    │
+│ - 'metadata': Summary statistics                                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Running the Data Pipeline
+
+**Test individual loaders:**
+```bash
+cd data/loaders
+python genetics_loader.py      # Test genetics loader
+python updrs_loader.py         # Test UPDRS loader
+python demographics_loader.py  # Test demographics loader
+```
+
+**Run full integration:**
 ```bash
 cd data
 python data_integrator.py
 ```
 
-**Output:**
+**Output files:**
 ```
 data/processed/
-├── static_data.csv         # Patient-level features
-├── longitudinal_data.csv   # Visit-level features
-└── slopes_data.csv         # Progression slopes
+├── static_data.csv         # Patient-level features (PATNO + genetics + demographics)
+├── longitudinal_data.csv   # Visit-level features (PATNO, EVENT_ID, months_since_baseline + all assessments)
+└── slopes_data.csv         # Progression slopes (PATNO + NP1TOT_slope, NP2TOT_slope, etc.)
 ```
 
-### Parallel Development
+### Complete Pipeline Flow
 
-For teams, see `data/TASK_ASSIGNMENTS.md` for detailed division of work.
+```
+Raw PPMI CSV Files
+    │
+    ├─→ participant_status.csv
+    │       └─→ [STANDARDIZED FILTERING] ──→ Valid PATNOs
+    │                                              │
+    ├─→ DemographicsLoader ───────────────────────┘
+    │   └─→ static_df (PATNO + demographics)
+    │
+    ├─→ GeneticsLoader ──────────────────────────┐
+    │   └─→ genetics_df (PATNO + genetics)       │
+    │                                            ├─→ static_df (merged)
+    │                                            │
+    ├─→ UPDRSLoader ────────────────────────────┐
+    │   └─→ updrs_df (PATNO, EVENT_ID, UPDRS)   │
+    │                                            │
+    ├─→ ClinicalAssessmentsLoader ──────────────┤
+    │   └─→ clinical_df (PATNO, EVENT_ID, ...)  │
+    │                                            │
+    ├─→ MedicationLoader ────────────────────────┤
+    │   └─→ medication_df (PATNO, EVENT_ID, ...)├─→ longitudinal_df (merged)
+    │                                            │
+    └─→ AgeAtVisitLoader ─────────────────────────┘
+        └─→ age_at_visit_df (PATNO, EVENT_ID, AGE_AT_VISIT)
+                        │
+                        ▼
+        ┌───────────────────────────────┐
+        │   DataIntegrator              │
+        │   prepare_final_dataset()     │
+        ├───────────────────────────────┤
+        │ 1. Merge static data          │
+        │ 2. Merge longitudinal data    │
+        │ 3. Compute slopes             │
+        │ 4. Filter complete cases      │
+        └───────────────────────────────┘
+                        │
+                        ▼
+        ┌───────────────────────────────┐
+        │   PPMILongitudinalDataset     │
+        │   (PyTorch Dataset)           │
+        ├───────────────────────────────┤
+        │ - Feature extraction          │
+        │ - Missingness masks           │
+        │ - Sequence padding            │
+        └───────────────────────────────┘
+                        │
+                        ▼
+              Training DataLoader
+```
+
+### Using the Base Loader Classes
+
+**Creating a new StaticDataLoader:**
+```python
+from data.base_loader import StaticDataLoader
+
+class MyStaticLoader(StaticDataLoader):
+    def load(self) -> pd.DataFrame:
+        # Start with valid participants
+        df = self._load_and_filter_participants(self.config)
+        
+        # Load your data
+        my_data = pd.read_csv(...)
+        
+        # Merge
+        df = df.merge(my_data, on='PATNO', how='inner')
+        return df
+```
+
+**Creating a new LongitudinalDataLoader:**
+```python
+from data.base_loader import LongitudinalDataLoader
+
+class MyLongitudinalLoader(LongitudinalDataLoader):
+    def load(self) -> pd.DataFrame:
+        # Load your longitudinal data
+        df = pd.read_csv(...)
+        
+        # Filter to valid participants
+        df = self.filter_by_valid_participants(df, self.config)
+        
+        # Compute time since baseline
+        df = self.compute_time_since_baseline(df)
+        
+        return df
+```
 
 ---
 
@@ -570,6 +765,7 @@ pytest tests/test_data.py
 ```bash
 # Run specific test class
 pytest tests/data_loaders/test_demographics_loader.py::TestDemographicsLoader
+pytest tests/data_loaders/test_age_at_visit_loader.py::TestAgeAtVisitLoader
 
 # Run specific test method
 pytest tests/test_models.py::TestV1Model::test_model_forward

@@ -19,14 +19,15 @@ class MedicationLoader(LongitudinalDataLoader):
     - ON/OFF status (often in UPDRS Part III, but can be separate)
     """
     
-    def __init__(self, base_dir: str, config: DataConfig):
+    def __init__(self, base_dir: str, config: DataConfig, valid_participants=None):
         """
         Args:
             base_dir: Base directory for data files
             config: Configuration dict with file paths
+            valid_participants: Optional pre-filtered participant DataFrame (shared across loaders)
         """
-        super().__init__(base_dir)
-        self.config = config
+        super().__init__(base_dir, config, valid_participants=valid_participants)
+        # config is now stored in base class as self.config - no need to store again
         
     def load(self) -> pd.DataFrame:
         """
@@ -41,15 +42,15 @@ class MedicationLoader(LongitudinalDataLoader):
         try:
             # Try common PPMI medication file names
             possible_files = [
-                'Use_of_PD_Medication.csv',
-                'PD_Medications.csv',
-                'Concomitant_Medications.csv'
+                # 'Use_of_PD_Medication.csv',
+                # 'PD_Medications.csv',
+                # 'Concomitant_Medications.csv'
             ]
             
             med_df = None
             for filename in possible_files:
                 try:
-                    med_path = f"{self.base_dir}/{filename}"
+                    med_path = self.resolve_path(filename)
                     print(f"Trying to load medications from: {med_path}")
                     med_df = pd.read_csv(med_path)
                     print(f"  ✓ Loaded from {filename}")
@@ -58,30 +59,24 @@ class MedicationLoader(LongitudinalDataLoader):
                     continue
             
             if med_df is not None:
-                # Select relevant columns
-                med_cols = ['PATNO', 'EVENT_ID']
-                if 'INFODT' in med_df.columns:
-                    med_cols.append('INFODT')
+                # Select columns following clinical_loader pattern
+                med_cols = ['PATNO', 'EVENT_ID', 'INFODT']
+                # Find LEDD column from config
+                found_ledd_col = next((col for col in self.config.features.ledd_features if col in med_df.columns), None)
+                if found_ledd_col:
+                    med_cols.append(found_ledd_col)
+                # Find PDMEDYN column from config
+                found_pdmedyn_col = next((col for col in self.config.features.pdmedyn_features if col in med_df.columns), None)
+                if found_pdmedyn_col:
+                    med_cols.append(found_pdmedyn_col)
                 
-                # Look for LEDD or related columns
-                for col in ['LEDD', 'LED', 'LEDD_TOTAL', 'LEDDTOT']:
-                    if col in med_df.columns:
-                        med_cols.append(col)
+                med_df = med_df[med_cols]
                 
-                # Look for medication flags
-                for col in ['PDMEDYN', 'ON_OFF', 'PD_MED_USE']:
-                    if col in med_df.columns:
-                        med_cols.append(col)
-                
-                med_df = med_df[[c for c in med_cols if c in med_df.columns]]
-                
-                # Standardize column names
-                if 'LED' in med_df.columns and 'LEDD' not in med_df.columns:
-                    med_df = med_df.rename(columns={'LED': 'LEDD'})
-                if 'LEDD_TOTAL' in med_df.columns:
-                    med_df = med_df.rename(columns={'LEDD_TOTAL': 'LEDD'})
-                if 'LEDDTOT' in med_df.columns:
-                    med_df = med_df.rename(columns={'LEDDTOT': 'LEDD'})
+                # Rename to standard names if needed
+                if found_ledd_col and found_ledd_col != 'LEDD':
+                    med_df = med_df.rename(columns={found_ledd_col: 'LEDD'})
+                if found_pdmedyn_col and found_pdmedyn_col != 'PDMEDYN':
+                    med_df = med_df.rename(columns={found_pdmedyn_col: 'PDMEDYN'})
                 
                 med_dfs.append(med_df)
                 print(f"  ✓ Medication data: {len(med_df)} visits")

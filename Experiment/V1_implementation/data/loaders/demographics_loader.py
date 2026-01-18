@@ -28,51 +28,16 @@ class DemographicsLoader(StaticDataLoader):
         'PATCOUS', 'PATCOUSPD']
     """
     
-    def __init__(self, base_dir: str, config: Config):
+    def __init__(self, base_dir: str, config: Config, valid_participants=None):
         """
         Args:
             base_dir: Base directory for data files
             config: Configuration dict with file paths
+            valid_participants: Optional pre-filtered participant DataFrame (shared across loaders)
         """
-        super().__init__(base_dir)
-        self.config = config
+        super().__init__(base_dir, config, valid_participants=valid_participants)
+        # config is now stored in base class as self.config - no need to store again
 
-    def __filter_valid_participants__(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Filter valid participants from participant_status DataFrame"""
-
-        # Remove participants with null ENROLL_DATE
-        df = df.dropna(subset=['ENROLL_DATE'])
-
-        # Keep only participants with valid enrollment status
-        valid_statuses = [
-            'Complete', 
-            'Enrolled', 
-            'Withdraw Deceased', 
-            'Withdrew'
-        ]
-        df = df[df['ENROLL_STATUS'].isin(valid_statuses)]
-
-        # Exclude SWEDD cohort
-        valid_cohorts = [
-            'Healthy Control', 
-            "Parkinson's Disease", 
-            'Prodromal'
-        ]
-        df = df[df['COHORT_DEFINITION'].isin(valid_cohorts)]
-    
-        # Reset index for a clean dataframe
-        df.reset_index(drop=True, inplace=True)
-
-        # Select only certain columns for final output
-        df = df[[
-            'PATNO', 
-            'COHORT', 
-            'COHORT_DEFINITION', 
-            'ENROLL_STATUS',
-            'ENROLL_AGE',
-        ]].copy()
-
-        return df
 
     def __load_and_merge_data__(self, df: pd.DataFrame, file_path: str,
                             merge_columns: List[str], 
@@ -136,53 +101,6 @@ class DemographicsLoader(StaticDataLoader):
         """
         return df.groupby('PATNO').agg(agg_columns).reset_index()
     
-    def __load_and_merge_age_at_visit__(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Load and merge age at visit file without aggregation.
-        Each row in age_at_visit (with different EVENT_ID) is joined to all demographic columns.
-        Result: multiple rows per PATNO (one for each EVENT_ID/visit)
-        
-        Args:
-            df: Main demographics dataframe
-            
-        Returns:
-            Dataframe with age_at_visit rows, each containing all demographic columns
-        """
-        def resolve_path(file_path):
-            if os.path.isabs(file_path):
-                return file_path
-            if file_path.startswith('../'):
-                return os.path.normpath(os.path.abspath(file_path))
-            return os.path.normpath(os.path.join(self.base_dir, file_path))
-        
-        file_path = resolve_path(self.config.data.age_at_visit)
-        
-        if not os.path.exists(file_path):
-            print(f"⚠️  Warning: age_at_visit file not found: {file_path}")
-            return df
-        
-        print(f"  Loading age_at_visit from: {file_path}")
-        age_df = pd.read_csv(file_path)
-        
-        if 'PATNO' not in age_df.columns:
-            print(f"⚠️  Warning: PATNO not found in age_at_visit, skipping merge")
-            return df
-        
-        # Select only PATNO and other age visit columns (do not aggregate)
-        age_cols_to_keep = ['PATNO', 'EVENT_ID', 'AGE_AT_VISIT']
-        age_cols_available = [col for col in age_cols_to_keep if col in age_df.columns]
-        age_df = age_df[age_cols_available].copy()
-        
-        # Merge: each age_at_visit row gets all demographic columns from df
-        # Result: multiple rows per PATNO (one for each EVENT_ID)
-        df = df.merge(
-            age_df,
-            on='PATNO',
-            how='left'
-        )
-        
-        print(f"  ✓ Merged age_at_visit: {len(age_df)} visit records")
-        return df
         
     def load(self) -> pd.DataFrame:
         """
@@ -199,15 +117,12 @@ class DemographicsLoader(StaticDataLoader):
                 return os.path.normpath(os.path.abspath(file_path))
             return os.path.normpath(os.path.join(self.base_dir, file_path))
         
-        # Load participant status
-        status_path = resolve_path(self.config.data.participant_status)
-        print(f"Loading participant status from: {status_path}")
-        if not os.path.exists(status_path):
-            raise FileNotFoundError(f"Participant status file not found: {status_path}\n"
-                                  f"  Checked: {os.path.abspath(status_path)}")
-        df = pd.read_csv(status_path)
-
-        df = self.__filter_valid_participants__(df)
+        # Load and filter participant status (using standardized method from base class)
+        # Include columns that we need from participant_status
+        # Uses self.config from base class - no need to pass config
+        df = self._load_and_filter_participants(
+            include_columns=['COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS', 'ENROLL_AGE']
+        )
 
         # Merge Socioeconomic Status
         socio_cols = ['PATNO', 'EDUCYRS']
@@ -252,9 +167,6 @@ class DemographicsLoader(StaticDataLoader):
             merge_columns=family_cols,
             how='left'
         )
-        
-        # Merge Age at Visit
-        df = self.__load_and_merge_age_at_visit__(df)
 
         # Select relevant columns
         demo_cols = ['PATNO', 'ENROLL_AGE', 'COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS']
@@ -312,7 +224,7 @@ class DemographicsLoader(StaticDataLoader):
         ]
 
     def validate(self, df: pd.DataFrame) -> bool:
-        """Validate demographics data (handles multiple rows per PATNO from age_at_visit)"""
+        """Validate demographics data"""
         if 'PATNO' not in df.columns:
             raise ValueError("Missing PATNO column")
         

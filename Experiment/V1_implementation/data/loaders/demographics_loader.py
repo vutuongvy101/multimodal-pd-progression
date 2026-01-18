@@ -6,15 +6,10 @@ Load patient demographics (age, sex, education, family history)
 import pandas as pd
 import numpy as np
 from typing import List
-import sys
 import os
 
-# Add parent directory to path for base_loader import
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from base_loader import StaticDataLoader
+from ..base_loader import StaticDataLoader
+from training.config import Config
 
 
 class DemographicsLoader(StaticDataLoader):
@@ -33,7 +28,7 @@ class DemographicsLoader(StaticDataLoader):
         'PATCOUS', 'PATCOUSPD']
     """
     
-    def __init__(self, base_dir: str, config: dict):
+    def __init__(self, base_dir: str, config: Config):
         """
         Args:
             base_dir: Base directory for data files
@@ -79,7 +74,7 @@ class DemographicsLoader(StaticDataLoader):
 
         return df
 
-    def __load_and_merge_data__(self, df: pd.DataFrame, config_key: str, 
+    def __load_and_merge_data__(self, df: pd.DataFrame, file_path: str,
                             merge_columns: List[str], 
                             how: str = 'left') -> pd.DataFrame:
         """
@@ -87,7 +82,7 @@ class DemographicsLoader(StaticDataLoader):
         
         Args:
             df: Main dataframe to merge into
-            config_key: Key in config['data'] (e.g., 'family_history', 'socio_economic')
+            file_path: self.config.data.age_at_visit or self.config.data.participant_status or self.config.data.socio_economic ...
             merge_columns: Columns to select from the CSV before merging
             how: Type of merge ('left', 'inner', 'outer')
         """
@@ -98,18 +93,18 @@ class DemographicsLoader(StaticDataLoader):
                 return os.path.normpath(os.path.abspath(file_path))
             return os.path.normpath(os.path.join(self.base_dir, file_path))
         
-        file_path = resolve_path(getattr(self.config['data'], config_key))
+        file_path = resolve_path(file_path)
         
         if not os.path.exists(file_path):
-            print(f"⚠️  Warning: {config_key} file not found: {file_path}")
+            print(f"⚠️  Warning file path not found: {file_path}")
             return df
         
-        print(f"  Loading {config_key} from: {file_path}")
+        print(f"  Loading: {file_path}")
         additional_df = pd.read_csv(file_path)
         
         # Ensure PATNO exists
         if 'PATNO' not in additional_df.columns:
-            print(f"⚠️  Warning: PATNO not found in {config_key}, skipping merge")
+            print(f"⚠️  Warning: PATNO not found in {file_path}, skipping merge")
             return df
         
         # Handle multiple rows per patient (e.g., multiple visits)
@@ -123,10 +118,10 @@ class DemographicsLoader(StaticDataLoader):
             additional_df,
             on='PATNO',
             how=how,
-            suffixes=('', f'_{config_key}')
+            suffixes=('', f'_{file_path}')
         )
         
-        print(f"  ✓ Merged {config_key}: {additional_df.shape[0]} records")
+        print(f"  ✓ Merged {file_path}: {additional_df.shape[0]} records")
         return df
     
     def __aggregate_by_patient__(self, df: pd.DataFrame, 
@@ -160,7 +155,7 @@ class DemographicsLoader(StaticDataLoader):
                 return os.path.normpath(os.path.abspath(file_path))
             return os.path.normpath(os.path.join(self.base_dir, file_path))
         
-        file_path = resolve_path(self.config['data'].age_at_visit)
+        file_path = resolve_path(self.config.data.age_at_visit)
         
         if not os.path.exists(file_path):
             print(f"⚠️  Warning: age_at_visit file not found: {file_path}")
@@ -205,7 +200,7 @@ class DemographicsLoader(StaticDataLoader):
             return os.path.normpath(os.path.join(self.base_dir, file_path))
         
         # Load participant status
-        status_path = resolve_path(self.config['data'].participant_status)
+        status_path = resolve_path(self.config.data.participant_status)
         print(f"Loading participant status from: {status_path}")
         if not os.path.exists(status_path):
             raise FileNotFoundError(f"Participant status file not found: {status_path}\n"
@@ -218,7 +213,7 @@ class DemographicsLoader(StaticDataLoader):
         socio_cols = ['PATNO', 'EDUCYRS']
         df = self.__load_and_merge_data__(
             df, 
-            'socio_economic', 
+            self.config.data.socio_economic,
             merge_columns=socio_cols,
             how='left'
         )
@@ -233,7 +228,7 @@ class DemographicsLoader(StaticDataLoader):
                         'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN' ]  
         df = self.__load_and_merge_data__(
             df, 
-            'demographics', 
+            self.config.data.demographics,
             merge_columns=demo_cols,
             how='left'
         )
@@ -253,7 +248,7 @@ class DemographicsLoader(StaticDataLoader):
                         'DISFAMPD']
         df = self.__load_and_merge_data__(
             df, 
-            'family_history', 
+            self.config.data.family_history,
             merge_columns=family_cols,
             how='left'
         )
@@ -315,28 +310,6 @@ class DemographicsLoader(StaticDataLoader):
             'COHORT_DEFINITION',
             'ENROLL_STATUS'
         ]
-    
-
-    # This will not work since Age_at_Visit introduces multiple rows per PATNO
-    # def validate(self, df: pd.DataFrame) -> bool:
-    #     """Validate demographics data"""
-    #     # Check PATNO exists
-    #     if 'PATNO' not in df.columns:
-    #         raise ValueError("Missing PATNO column")
-        
-    #     # Check for duplicates
-    #     if df['PATNO'].duplicated().any():
-    #         raise ValueError("Duplicate PATNOs found")
-        
-    #     # Check ENROLL_AGE is reasonable
-    #     if 'ENROLL_AGE' in df.columns:
-    #         age_range = df['ENROLL_AGE'].dropna()
-    #         if len(age_range) > 0:
-    #             if age_range.min() < 18 or age_range.max() > 100:
-    #                 print(f"⚠️  Warning: Age range looks unusual: {age_range.min():.1f} - {age_range.max():.1f}")
-        
-    #     print(f"✓ Validation passed: {len(df)} unique patients")
-    #     return True
 
     def validate(self, df: pd.DataFrame) -> bool:
         """Validate demographics data (handles multiple rows per PATNO from age_at_visit)"""
@@ -347,59 +320,3 @@ class DemographicsLoader(StaticDataLoader):
         print(f"✓ Validation passed: {unique_patients} unique patients, {len(df)} total records")
         return True
 
-
-# ============================================================================
-# TESTING CODE
-# ============================================================================
-
-if __name__ == "__main__":
-    print("=" * 80)
-    print("Testing DemographicsLoader")
-    print("=" * 80)
-    
-    # Add parent directories to path for config import
-    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if v1_dir not in sys.path:
-        sys.path.insert(0, v1_dir)
-    from training.config import get_default_config
-    
-    config = get_default_config()
-    
-    # Create loader
-    loader = DemographicsLoader("../../ppmi_pd", config)
-    
-    try:
-        # Load data
-        demo_df = loader.load()
-        
-        # Validate
-        loader.validate(demo_df)
-        
-        # Get summary
-        summary = loader.get_summary(demo_df)
-        unique_patients = demo_df['PATNO'].nunique()
-        print(f"\n✓ Demographics loader working!")
-        print(f"  Unique Patients: {unique_patients}")
-        print(f"  Records: {summary['n_rows']}")
-        print(f"  Features: {summary['n_columns']-1}")
-        print(f"  Columns: {', '.join(demo_df.columns.tolist())}")
-        
-        # Show distributions
-        if 'ENROLL_AGE' in demo_df.columns:
-            print(f"\nAge distribution:")
-            print(f"  Mean: {demo_df['ENROLL_AGE'].mean():.1f}")
-            print(f"  Range: {demo_df['ENROLL_AGE'].min():.1f} - {demo_df['ENROLL_AGE'].max():.1f}")
-        
-        if 'COHORT' in demo_df.columns:
-            print(f"\nCohort distribution (unique patients):")
-            # Count cohorts by unique PATNO (one patient counted once)
-            unique_cohort = demo_df[['PATNO', 'COHORT_DEFINITION']].drop_duplicates(subset='PATNO')
-            print(unique_cohort['COHORT_DEFINITION'].value_counts())
-            
-    except FileNotFoundError as e:
-        print(f"\n⚠️  File not found: {e}")
-        print("Update the paths in config.py to match your data location")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()

@@ -6,15 +6,9 @@ Load medication information (LEDD, medication history, ON/OFF status)
 import pandas as pd
 import numpy as np
 from typing import List
-import sys
-import os
 
-# Add parent directory to path for base_loader import
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from base_loader import LongitudinalDataLoader
+from ..base_loader import LongitudinalDataLoader
+from training.config import DataConfig
 
 
 class MedicationLoader(LongitudinalDataLoader):
@@ -25,7 +19,7 @@ class MedicationLoader(LongitudinalDataLoader):
     - ON/OFF status (often in UPDRS Part III, but can be separate)
     """
     
-    def __init__(self, base_dir: str, config: dict):
+    def __init__(self, base_dir: str, config: DataConfig):
         """
         Args:
             base_dir: Base directory for data files
@@ -141,57 +135,3 @@ class MedicationLoader(LongitudinalDataLoader):
         
         return True
 
-
-# ============================================================================
-# TESTING CODE
-# ============================================================================
-
-if __name__ == "__main__":
-    print("=" * 80)
-    print("Testing MedicationLoader")
-    print("=" * 80)
-    
-    # Add parent directories to path for config import
-    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if v1_dir not in sys.path:
-        sys.path.insert(0, v1_dir)
-    from training.config import get_default_config
-    
-    config = get_default_config()
-    
-    # Create loader
-    loader = MedicationLoader("../../ppmi_pd", config)
-    
-    try:
-        # Load data
-        med_df = loader.load()
-        
-        # Validate
-        loader.validate(med_df)
-        
-        # Get summary
-        summary = loader.get_summary(med_df)
-        print(f"\n✓ Medication loader working!")
-        print(f"  Total visits: {summary['n_rows']}")
-        if len(med_df) > 0:
-            print(f"  Unique patients: {med_df['PATNO'].nunique()}")
-            print(f"  Features: {summary['n_columns']-3}")
-            print(f"  Columns: {', '.join([c for c in med_df.columns if c not in ['PATNO', 'EVENT_ID', 'INFODT', 'months_since_baseline']])}")
-            
-            # Show LEDD distribution
-            if 'LEDD' in med_df.columns:
-                print(f"\nLEDD distribution:")
-                print(f"  Mean: {med_df['LEDD'].mean():.1f}")
-                print(f"  Median: {med_df['LEDD'].median():.1f}")
-                print(f"  Range: {med_df['LEDD'].min():.1f} - {med_df['LEDD'].max():.1f}")
-                print(f"  N with data: {med_df['LEDD'].notna().sum()}")
-        else:
-            print("  No medication data available")
-            
-    except FileNotFoundError as e:
-        print(f"\n⚠️  File not found: {e}")
-        print("This is OK - medication data is optional")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()

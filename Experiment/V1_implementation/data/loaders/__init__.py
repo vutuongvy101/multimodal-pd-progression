@@ -12,11 +12,11 @@ try:
     from .medication_loader import MedicationLoader
 except ImportError:
     # Absolute imports when run as script
-    from genetics_loader import GeneticsLoader
-    from demographics_loader import DemographicsLoader
-    from updrs_loader import UPDRSLoader
-    from clinical_loader import ClinicalAssessmentsLoader
-    from medication_loader import MedicationLoader
+    from data.loaders.genetics_loader import GeneticsLoader
+    from data.loaders.demographics_loader import DemographicsLoader
+    from data.loaders.updrs_loader import UPDRSLoader
+    from data.loaders.clinical_loader import ClinicalAssessmentsLoader
+    from data.loaders.medication_loader import MedicationLoader
 
 __all__ = [
     'GeneticsLoader',

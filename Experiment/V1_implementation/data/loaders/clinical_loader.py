@@ -6,15 +6,9 @@ Load additional clinical assessments (MoCA, sleep, autonomic, QoL)
 import pandas as pd
 import numpy as np
 from typing import List, Dict
-import sys
-import os
 
-# Add parent directory to path for base_loader import
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from base_loader import LongitudinalDataLoader
+from ..base_loader import LongitudinalDataLoader
+from training.config import DataConfig
 
 
 class ClinicalAssessmentsLoader(LongitudinalDataLoader):
@@ -27,7 +21,7 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
     - Other scales as available
     """
     
-    def __init__(self, base_dir: str, config: dict):
+    def __init__(self, base_dir: str, config: DataConfig):
         """
         Args:
             base_dir: Base directory for data files
@@ -47,7 +41,7 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
         
         # Load MoCA (cognitive)
         try:
-            moca_path = f"{self.base_dir}/{self.config['data'].moca}"
+            moca_path = f"{self.base_dir}/{self.config.data.moca}"
             print(f"Loading MoCA from: {moca_path}")
             moca_df = pd.read_csv(moca_path)
             # Usually has MOCA total score
@@ -167,54 +161,3 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
         
         return True
 
-
-# ============================================================================
-# TESTING CODE
-# ============================================================================
-
-if __name__ == "__main__":
-    print("=" * 80)
-    print("Testing ClinicalAssessmentsLoader")
-    print("=" * 80)
-    
-    # Add parent directories to path for config import
-    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if v1_dir not in sys.path:
-        sys.path.insert(0, v1_dir)
-    from training.config import get_default_config
-    
-    config = get_default_config()
-    
-    # Create loader
-    loader = ClinicalAssessmentsLoader("../../ppmi_pd", config)
-    
-    try:
-        # Load data
-        clinical_df = loader.load()
-        
-        # Validate
-        loader.validate(clinical_df)
-        
-        # Get summary
-        summary = loader.get_summary(clinical_df)
-        print(f"\n✓ Clinical assessments loader working!")
-        print(f"  Total visits: {summary['n_rows']}")
-        print(f"  Unique patients: {clinical_df['PATNO'].nunique()}")
-        print(f"  Features: {summary['n_columns']-3}")
-        
-        # Show distributions
-        print(f"\nClinical assessments (mean ± std):")
-        for col in clinical_df.columns:
-            if col not in ['PATNO', 'EVENT_ID', 'INFODT', 'months_since_baseline', 'visit_date']:
-                mean_val = clinical_df[col].mean()
-                std_val = clinical_df[col].std()
-                n_val = clinical_df[col].notna().sum()
-                print(f"  {col}: {mean_val:.1f} ± {std_val:.1f} (n={n_val})")
-            
-    except FileNotFoundError as e:
-        print(f"\n⚠️  File not found: {e}")
-        print("Update the paths in config.py to match your data location")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()

@@ -120,12 +120,3 @@ class LongitudinalDataLoader(BaseDataLoader):
             df['months_since_baseline'] = df['EVENT_ID'].map(event_mapping)
         
         return df
-
-
-if __name__ == "__main__":
-    print("Base loader classes defined.")
-    print("\nLoader hierarchy:")
-    print("  BaseDataLoader (abstract)")
-    print("    ├─ StaticDataLoader (patient-level data)")
-    print("    └─ LongitudinalDataLoader (visit-level data)")
-    print("\nEach specific loader should inherit from one of these.")

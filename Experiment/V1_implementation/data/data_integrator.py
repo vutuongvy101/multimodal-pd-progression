@@ -43,7 +43,7 @@ class DataIntegrator:
             config: Configuration dict
         """
         self.config = config
-        self.base_dir = config['data'].base_dir
+        self.base_dir = config.data.base_dir
         
         # Initialize all loaders
         print("Initializing loaders...")
@@ -139,7 +139,7 @@ class DataIntegrator:
         """
         print("\n--- Computing Progression Slopes ---")
         
-        min_visits = self.config['training'].min_visits_for_slope
+        min_visits = self.config.training.min_visits_for_slope
         slopes_data = []
         
         for patno, group in longitudinal_df.groupby('PATNO'):
@@ -262,7 +262,7 @@ if __name__ == "__main__":
         
         # Save to CSV for inspection
         print("\n--- Saving Data ---")
-        output_dir = config['data'].processed_data_dir
+        output_dir = config.data.processed_data_dir
         import os
         os.makedirs(output_dir, exist_ok=True)
         

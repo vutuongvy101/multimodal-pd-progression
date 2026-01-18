@@ -4,6 +4,8 @@ Configuration for V1 Multimodal Longitudinal Transformer
 
 from dataclasses import dataclass, field
 from typing import List, Optional
+from pathlib import Path
+import os
 import torch
 
 @dataclass
@@ -11,6 +13,7 @@ class FeatureConfig:
     """Configuration for feature groups"""
     
     # Static features (genetics + demographics)
+    # Internal genetic feature components (use genetics_features property for public access)
     monogenic_variants_features: List[str] = field(default_factory=lambda: [
         'LRRK2', 'GBA', 'SNCA', 'PRKN', 'APOE', 'PATHVAR_COUNT', 'VAR_GENE'
     ])
@@ -315,8 +318,8 @@ class TrainingConfig:
 class DataConfig:
     """Configuration for data paths"""
     
-    # Base directory
-    base_dir: str = "../../ppmi_pd"
+    _repo_root = Path(__file__).parent.parent.parent.parent
+    base_dir: str = str(_repo_root / "ppmi_pd")
     
     # Input files
     participant_status: str = "Participant_Status_14Dec2025.csv"
@@ -343,15 +346,29 @@ class DataConfig:
     results_dir: str = "results"
 
 
+@dataclass
+class Config:
+    """Complete configuration object for V1 model"""
+    features: FeatureConfig
+    model: ModelConfig
+    training: TrainingConfig
+    data: DataConfig
+    
+    def __post_init__(self):
+        """Validate configuration after initialization"""
+        # Ensure MLP dimensions are compatible
+        pass
+
+
 # Create default configs
-def get_default_config():
+def get_default_config() -> Config:
     """Get default configuration for V1 model"""
-    return {
-        'features': FeatureConfig(),
-        'model': ModelConfig(),
-        'training': TrainingConfig(),
-        'data': DataConfig()
-    }
+    return Config(
+        features=FeatureConfig(),
+        model=ModelConfig(),
+        training=TrainingConfig(),
+        data=DataConfig()
+    )
 
 
 if __name__ == "__main__":
@@ -363,20 +380,20 @@ if __name__ == "__main__":
     print("=" * 80)
     
     print("\n--- Feature Configuration ---")
-    print(f"Static features: {len(config['features'].static_features)}")
-    print(f"Part I (non-motor): {len(config['features'].part1_features)}")
-    print(f"Part II (motor ADL): {len(config['features'].part2_features)}")
-    print(f"Part III (motor exam): {len(config['features'].part3_features)}")
-    print(f"Part IV (complications): {len(config['features'].part4_features)}")
-    print(f"Other non-motor: {len(config['features'].other_nonmotor_features)}")
-    print(f"Medication context: {len(config['features'].medication_features)}")
-    print(f"UPDRS totals: {', '.join(config['features'].all_updrs_totals)}")
+    print(f"Static features: {len(config.features.static_features)}")
+    print(f"Part I (non-motor): {len(config.features.part1_features)}")
+    print(f"Part II (motor ADL): {len(config.features.part2_features)}")
+    print(f"Part III (motor exam): {len(config.features.part3_features)}")
+    print(f"Part IV (complications): {len(config.features.part4_features)}")
+    print(f"Other non-motor: {len(config.features.other_nonmotor_features)}")
+    print(f"Medication context: {len(config.features.medication_features)}")
+    print(f"UPDRS totals: {', '.join(config.features.all_updrs_totals)}")
     
     print("\n--- Model Configuration ---")
-    print(f"d_model: {config['model'].d_model}")
-    print(f"n_heads: {config['model'].n_heads}")
-    print(f"n_layers: {config['model'].n_layers}")
-    print(f"max_seq_len: {config['model'].max_seq_len}")
+    print(f"d_model: {config.model.d_model}")
+    print(f"n_heads: {config.model.n_heads}")
+    print(f"n_layers: {config.model.n_layers}")
+    print(f"max_seq_len: {config.model.max_seq_len}")
     
     print("\n--- MLP Dimensions (Auto-calculated) ---")
     modality_map = {
@@ -389,12 +406,12 @@ if __name__ == "__main__":
         'other': 'other_nonmotor_features',
     }
     for mod, attr_name in modality_map.items():
-        n_features = len(getattr(config['features'], attr_name))
-        mlp_dims = config['model'].get_mlp_dims(config['features'], mod)
+        n_features = len(getattr(config.features, attr_name))
+        mlp_dims = config.model.get_mlp_dims(config.features, mod)
         print(f"{mod:8s}: {n_features:3d} features → {mlp_dims}")
     
     print("\n--- Training Configuration ---")
-    print(f"batch_size: {config['training'].batch_size}")
-    print(f"learning_rate: {config['training'].learning_rate}")
-    print(f"lambda_slope: {config['training'].lambda_slope}")
-    print(f"max_epochs: {config['training'].max_epochs}")
+    print(f"batch_size: {config.training.batch_size}")
+    print(f"learning_rate: {config.training.learning_rate}")
+    print(f"lambda_slope: {config.training.lambda_slope}")
+    print(f"max_epochs: {config.training.max_epochs}")

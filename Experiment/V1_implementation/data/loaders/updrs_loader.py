@@ -6,15 +6,9 @@ Load all four UPDRS parts (I, II, III, IV)
 import pandas as pd
 import numpy as np
 from typing import List, Dict
-import sys
-import os
 
-# Add parent directory to path for base_loader import
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from base_loader import LongitudinalDataLoader
+from ..base_loader import LongitudinalDataLoader
+from training.config import DataConfig
 
 
 class UPDRSLoader(LongitudinalDataLoader):
@@ -26,7 +20,7 @@ class UPDRSLoader(LongitudinalDataLoader):
     - Part IV: Motor complications (NP4*)
     """
     
-    def __init__(self, base_dir: str, config: dict):
+    def __init__(self, base_dir: str, config: DataConfig):
         """
         Args:
             base_dir: Base directory for data files
@@ -50,7 +44,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         
         # Load Part I (Non-motor)
         try:
-            part1_path = f"{self.base_dir}/{self.config['data'].updrs_part1}"
+            part1_path = f"{self.base_dir}/{self.config.data.updrs_part1}"
             print(f"Loading UPDRS Part I from: {part1_path}")
             part1_df = pd.read_csv(part1_path)
             # Select NP1* columns
@@ -62,7 +56,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         
         # Load Part II (Motor ADL)
         try:
-            part2_path = f"{self.base_dir}/{self.config['data'].updrs_part2}"
+            part2_path = f"{self.base_dir}/{self.config.data.updrs_part2}"
             print(f"Loading UPDRS Part II from: {part2_path}")
             part2_df = pd.read_csv(part2_path)
             part2_cols = ['PATNO', 'EVENT_ID', 'INFODT'] + [c for c in part2_df.columns if c.startswith('NP2')]
@@ -73,7 +67,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         
         # Load Part III (Motor Examination)
         try:
-            part3_path = f"{self.base_dir}/{self.config['data'].updrs_part3}"
+            part3_path = f"{self.base_dir}/{self.config.data.updrs_part3}"
             print(f"Loading UPDRS Part III from: {part3_path}")
             part3_df = pd.read_csv(part3_path)
             # Include PDMEDYN (ON/OFF status) if available
@@ -88,7 +82,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         
         # Load Part IV (Motor Complications)
         try:
-            part4_path = f"{self.base_dir}/{self.config['data'].updrs_part4}"
+            part4_path = f"{self.base_dir}/{self.config.data.updrs_part4}"
             print(f"Loading UPDRS Part IV from: {part4_path}")
             part4_df = pd.read_csv(part4_path)
             part4_cols = ['PATNO', 'EVENT_ID', 'INFODT'] + [c for c in part4_df.columns if c.startswith('NP4')]
@@ -153,60 +147,3 @@ class UPDRSLoader(LongitudinalDataLoader):
         
         return True
 
-
-# ============================================================================
-# TESTING CODE
-# ============================================================================
-
-if __name__ == "__main__":
-    print("=" * 80)
-    print("Testing UPDRSLoader")
-    print("=" * 80)
-    
-    # Add parent directories to path for config import
-    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if v1_dir not in sys.path:
-        sys.path.insert(0, v1_dir)
-    from training.config import get_default_config
-    
-    config = get_default_config()
-    
-    # Create loader
-    loader = UPDRSLoader("../../ppmi_pd", config)
-    
-    try:
-        # Load data
-        updrs_df = loader.load()
-        
-        # Validate
-        loader.validate(updrs_df)
-        
-        # Get summary
-        summary = loader.get_summary(updrs_df)
-        print(f"\n✓ UPDRS loader working!")
-        print(f"  Total visits: {summary['n_rows']}")
-        print(f"  Unique patients: {updrs_df['PATNO'].nunique()}")
-        print(f"  Features: {summary['n_columns']-3}")
-        
-        # Show totals distribution
-        print(f"\nUPDRS Totals (mean ± std):")
-        for total in ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']:
-            if total in updrs_df.columns:
-                mean_val = updrs_df[total].mean()
-                std_val = updrs_df[total].std()
-                n_val = updrs_df[total].notna().sum()
-                print(f"  {total}: {mean_val:.1f} ± {std_val:.1f} (n={n_val})")
-        
-        # Show time distribution
-        if 'months_since_baseline' in updrs_df.columns:
-            print(f"\nTime distribution:")
-            print(f"  Range: {updrs_df['months_since_baseline'].min():.1f} - {updrs_df['months_since_baseline'].max():.1f} months")
-            print(f"  Mean: {updrs_df['months_since_baseline'].mean():.1f} months")
-            
-    except FileNotFoundError as e:
-        print(f"\n⚠️  File not found: {e}")
-        print("Update the paths in config.py to match your data location")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()

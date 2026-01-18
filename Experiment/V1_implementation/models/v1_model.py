@@ -47,13 +47,13 @@ class V1MultimodalTransformer(nn.Module):
     def __init__(self, config):
         """
         Args:
-            config: Configuration dict with 'model' and 'features' sections
+            config: Config object with model and features attributes
         """
         super().__init__()
         
         self.config = config
-        model_config = config['model']
-        feature_config = config['features']
+        model_config = config.model
+        feature_config = config.features
         
         # Get feature dimensions
         n_static = len(feature_config.static_features)
@@ -288,10 +288,10 @@ if __name__ == "__main__":
     batch_size = 4
     seq_len = 10
     
-    n_static = len(config['features'].static_features)
-    n_motor = len(config['features'].motor_features)
-    n_nonmotor = len(config['features'].nonmotor_features)
-    n_med = len(config['features'].medication_features)
+    n_static = len(config.features.static_features)
+    n_motor = len(config.features.motor_features)
+    n_nonmotor = len(config.features.nonmotor_features)
+    n_med = len(config.features.medication_features)
     
     print(f"\nCreating dummy data:")
     print(f"  Batch size: {batch_size}, Sequence length: {seq_len}")

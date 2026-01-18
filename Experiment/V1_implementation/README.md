@@ -16,8 +16,9 @@ A simplified, production-ready deep learning model for PD progression prediction
 8. [Training](#training)
 9. [Configuration](#configuration)
 10. [UPDRS Structure](#updrs-structure)
-11. [Troubleshooting](#troubleshooting)
-12. [Next Steps](#next-steps)
+11. [Testing](#testing)
+12. [Troubleshooting](#troubleshooting)
+13. [Next Steps](#next-steps)
 
 ---
 
@@ -142,7 +143,26 @@ conda activate sri_hri
 pip install torch numpy pandas scipy tqdm
 ```
 
-### 3. Configure Data Paths
+### 3. Install Package in Editable Mode (Optional but Recommended)
+
+Install the V1 package in editable mode so that imports work properly and IDE support (like IntelliJ) can recognize the package structure:
+
+```bash
+# Make sure you're in the V1_implementation directory
+cd V1_implementation
+
+# Install in editable mode (use the same conda environment)
+pip install -e .
+```
+
+This will install the package in development mode, which means:
+- Changes to the code are immediately reflected without reinstalling
+- IDEs like IntelliJ/PyCharm can better resolve imports (especially `from training.config import ...`)
+- The package is only installed in your current virtual environment
+
+**Note**: If you're using IntelliJ/PyCharm, make sure your IDE is configured to use the Python interpreter from your conda environment (Settings → Project → Python Interpreter).
+
+### 4. Configure Data Paths
 
 Edit `training/config.py` to point to your PPMI data:
 
@@ -170,7 +190,7 @@ class DataConfig:
 
 **Recommended**: Use absolute paths or update paths to be relative to `base_dir` (without `../` prefix).
 
-### 4. Test Components
+### 5. Test Components
 
 ```bash
 cd V1_implementation
@@ -182,7 +202,7 @@ python training/config.py
 python models/v1_model.py
 ```
 
-### 5. Prepare Data
+### 6. Prepare Data
 
 Data loading is modularized into 5 independent tasks (see [Data Pipeline](#data-pipeline)):
 
@@ -191,7 +211,7 @@ cd data
 python data_integrator.py
 ```
 
-### 6. Train Model
+### 7. Train Model
 
 ```bash
 python training/train.py
@@ -204,6 +224,9 @@ python training/train.py
 ```
 V1_implementation/
 ├── README.md                    # This file
+├── setup.py                     # Package setup (for pip install -e .)
+├── pyproject.toml               # Python project configuration
+├── __init__.py                  # Package initialization
 │
 ├── training/                    # Training & configuration
 │   ├── config.py               # All hyperparameters & paths
@@ -216,18 +239,36 @@ V1_implementation/
 │   ├── v1_model.py             # Complete V1 Transformer
 │   └── __init__.py
 │
-└── data/                        # Data loading & processing
-    ├── base_loader.py          # Base classes
-    ├── data_integrator.py      # Combines all loaders
-    ├── dataset.py              # PyTorch Dataset & DataLoader
-    ├── TASK_ASSIGNMENTS.md     # Parallel task guide
-    └── loaders/                # Individual data loaders
-        ├── genetics_loader.py
-        ├── demographics_loader.py
-        ├── updrs_loader.py
-        ├── clinical_loader.py
-        └── medication_loader.py
+├── data/                        # Data loading & processing
+│   ├── base_loader.py          # Base classes
+│   ├── data_integrator.py      # Combines all loaders
+│   ├── data_preparation.py     # Data preparation utilities
+│   ├── dataset.py              # PyTorch Dataset & DataLoader
+│   ├── __init__.py
+│   └── loaders/                # Individual data loaders
+│       ├── genetics_loader.py
+│       ├── demographics_loader.py
+│       ├── updrs_loader.py
+│       ├── clinical_loader.py
+│       ├── medication_loader.py
+│       └── __init__.py
+│
+└── tests/                       # Test suite
+    ├── __init__.py             # Test package initialization
+    ├── conftest.py             # Pytest fixtures and shared configuration
+    ├── test_loaders.py         # Tests for data loaders
+    ├── test_models.py          # Tests for model components
+    ├── test_training.py        # Tests for training configuration
+    └── test_data.py            # Tests for data processing pipeline
 ```
+
+### Key Files
+
+- **Configuration**: `training/config.py` - All hyperparameters, paths, and settings
+- **Model**: `models/v1_model.py` - Complete V1 Transformer architecture
+- **Data Pipeline**: `data/data_integrator.py` - Combines all data loaders
+- **Training**: `training/train.py` - Training loop and model training
+- **Tests**: `tests/` - Comprehensive test suite for all components
 
 ---
 
@@ -458,6 +499,188 @@ This comprehensive approach captures:
 
 ---
 
+## Testing
+
+### Test Suite Structure
+
+The project includes a comprehensive test suite in the `tests/` directory:
+
+```
+tests/
+├── __init__.py          # Test package initialization
+├── conftest.py          # Pytest fixtures and shared configuration
+├── test_models.py       # Tests for model components
+├── test_training.py     # Tests for training configuration
+├── test_data.py         # Tests for data processing pipeline
+└── data_loaders/        # Tests for individual data loaders
+    ├── __init__.py
+    ├── test_base_loader.py        # Base loader + interface tests
+    ├── test_demographics_loader.py
+    ├── test_genetics_loader.py
+    ├── test_updrs_loader.py
+    ├── test_clinical_loader.py
+    └── test_medication_loader.py
+```
+
+### Running Tests
+
+#### Prerequisites
+
+Install pytest and optional testing dependencies:
+
+```bash
+pip install pytest pytest-cov
+```
+
+#### Run All Tests
+
+```bash
+# From V1_implementation directory
+pytest tests/
+
+# With verbose output
+pytest tests/ -v
+
+# With coverage report
+pytest tests/ --cov=. --cov-report=html
+```
+
+#### Run Specific Test Files
+
+```bash
+# Test all data loaders
+pytest tests/data_loaders/
+
+# Test specific loader (e.g., demographics)
+pytest tests/data_loaders/test_demographics_loader.py
+
+# Test model components only
+pytest tests/test_models.py
+
+# Test training configuration only
+pytest tests/test_training.py
+
+# Test data processing only
+pytest tests/test_data.py
+```
+
+#### Run Specific Test Classes or Methods
+
+```bash
+# Run specific test class
+pytest tests/data_loaders/test_demographics_loader.py::TestDemographicsLoader
+
+# Run specific test method
+pytest tests/test_models.py::TestV1Model::test_model_forward
+```
+
+### Test Markers
+
+Tests are marked for different conditions:
+
+- `@pytest.mark.requires_data` - Tests that need actual data files (will skip if data not available)
+- `@pytest.mark.slow` - Tests that take longer to run
+
+Run tests by marker:
+
+```bash
+# Skip tests that require data
+pytest tests/ -m "not requires_data"
+
+# Run only slow tests
+pytest tests/ -m "slow"
+```
+
+### Test Coverage
+
+Generate coverage reports:
+
+```bash
+# Generate HTML coverage report
+pytest tests/ --cov=. --cov-report=html
+
+# View report
+open htmlcov/index.html  # On macOS
+```
+
+### Quick Component Testing
+
+For quick testing of individual components during development, you can still use the `if __name__ == "__main__":` blocks in each module:
+
+```bash
+# Test configuration
+python training/config.py
+
+# Test embeddings
+python models/embeddings.py
+
+# Test data loaders
+python data/loaders/demographics_loader.py
+python data/loaders/genetics_loader.py
+
+# Test model
+python models/v1_model.py
+```
+
+**Note**: These quick tests are useful during development, but the formal test suite in `tests/` is recommended for comprehensive testing.
+
+### Writing New Tests
+
+When adding new features, add corresponding tests:
+
+1. **Data Loaders**: Create a new file in `tests/data_loaders/` (e.g., `test_new_loader.py`)
+2. **Model Components**: Add tests to `tests/test_models.py`
+3. **Training Utilities**: Add tests to `tests/test_training.py`
+4. **Data Processing**: Add tests to `tests/test_data.py`
+
+#### Example Test Structure
+
+```python
+# tests/data_loaders/test_new_loader.py
+"""
+Tests for NewLoader
+"""
+
+import pytest
+import pandas as pd
+
+
+class TestNewLoader:
+    """Test NewLoader"""
+    
+    @pytest.mark.requires_data
+    def test_new_loader_load(self, test_config, skip_if_no_data):
+        """Test NewLoader can load data"""
+        from data.loaders.new_loader import NewLoader
+        
+        loader = NewLoader(test_config.data.base_dir, test_config)
+        df = loader.load()
+        
+        assert isinstance(df, pd.DataFrame)
+        assert 'PATNO' in df.columns
+        assert len(df) > 0
+```
+
+### Continuous Integration
+
+The test suite is designed to work with CI/CD systems. Example GitHub Actions workflow:
+
+```yaml
+# .github/workflows/test.yml
+name: Tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+      - run: pip install pytest pytest-cov
+      - run: pytest tests/ --cov=. --cov-report=xml
+```
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
@@ -470,7 +693,9 @@ This comprehensive approach captures:
 | Loss is NaN | Learning rate too high | Reduce to 1e-5, normalize features |
 | All predictions similar | Low feature variance | Check data, increase `lambda_slope` |
 
-### Testing Components
+### Quick Component Testing
+
+For quick testing during development, you can use the `if __name__ == "__main__":` blocks:
 
 ```bash
 # Test configuration
@@ -485,6 +710,8 @@ python models/v1_model.py
 # Test dataset
 python data/dataset.py
 ```
+
+**For comprehensive testing, see the [Testing](#testing) section above.**
 
 ---
 
@@ -506,6 +733,21 @@ conda activate sri_hri
 ### Test Configuration
 ```bash
 python training/config.py
+```
+
+### Run Tests
+```bash
+# Run all tests
+pytest tests/
+
+# Run with verbose output
+pytest tests/ -v
+
+# Test all data loaders
+pytest tests/data_loaders/ -v
+
+# Test specific loader (e.g., demographics)
+pytest tests/data_loaders/test_demographics_loader.py -v
 ```
 
 ### Run Data Integration

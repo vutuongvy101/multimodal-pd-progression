@@ -39,7 +39,7 @@ class V1Trainer:
         self.val_loader = val_loader
         self.device = device
         
-        training_config = config['training']
+        training_config = config.training
         
         # Optimizer
         self.optimizer = torch.optim.AdamW(
@@ -75,7 +75,7 @@ class V1Trainer:
         }
         
         # Create save directory
-        self.save_dir = Path(config['data'].model_save_dir)
+        self.save_dir = Path(config.data.model_save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         
     def train_epoch(self) -> Dict[str, float]:

@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "v1-pd-model"
+version = "1.0.0"
+description = "V1 Multimodal Longitudinal Transformer for Parkinson's Disease"
+requires-python = ">=3.8"
+
+[tool.setuptools]
+packages = ["training", "data", "data.loaders", "models"]

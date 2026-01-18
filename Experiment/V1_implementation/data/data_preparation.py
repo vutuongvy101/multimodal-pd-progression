@@ -16,12 +16,12 @@ class PPMIDataPreparator:
     
     def __init__(self, config):
         self.config = config
-        self.feature_config = config['features']
-        self.training_config = config['training']
+        self.feature_config = config.features
+        self.training_config = config.training
         
     def load_raw_data(self) -> Dict[str, pd.DataFrame]:
         """Load all required CSV files"""
-        data_config = self.config['data']
+        data_config = self.config.data
         base_dir = data_config.base_dir
         
         data = {}

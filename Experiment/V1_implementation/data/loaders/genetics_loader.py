@@ -6,15 +6,10 @@ Load and merge genetics files (consensus, PRS, PCs)
 import pandas as pd
 import numpy as np
 from typing import List
-import sys
 import os
 
-# Add parent directory to path for base_loader import
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from base_loader import StaticDataLoader
+from ..base_loader import StaticDataLoader
+from training.config import DataConfig
 
 
 class GeneticsLoader(StaticDataLoader):
@@ -25,7 +20,7 @@ class GeneticsLoader(StaticDataLoader):
     3. Principal components (PC1-PC10 for population structure)
     """
     
-    def __init__(self, base_dir: str, config: dict):
+    def __init__(self, base_dir: str, config: DataConfig):
         """
         Args:
             base_dir: Base directory for data files
@@ -57,7 +52,7 @@ class GeneticsLoader(StaticDataLoader):
             return resolved
         
         # Load genetic consensus
-        consensus_path = resolve_path(self.config['data'].genetic_consensus)
+        consensus_path = resolve_path(self.config.data.genetic_consensus)
         print(f"Loading genetic consensus from: {consensus_path}")
         if not os.path.exists(consensus_path):
             raise FileNotFoundError(f"Genetic consensus file not found: {consensus_path}\n"
@@ -66,7 +61,7 @@ class GeneticsLoader(StaticDataLoader):
         consensus_df = pd.read_csv(consensus_path)
         
         # Load PRS scores
-        prs_path = resolve_path(self.config['data'].prs_scores)
+        prs_path = resolve_path(self.config.data.prs_scores)
         print(f"Loading PRS scores from: {prs_path}")
         if not os.path.exists(prs_path):
             raise FileNotFoundError(f"PRS scores file not found: {prs_path}\n"
@@ -75,7 +70,7 @@ class GeneticsLoader(StaticDataLoader):
         prs_df = pd.read_csv(prs_path)
         
         # Load principal components
-        pcs_path = resolve_path(self.config['data'].prs_pcs)
+        pcs_path = resolve_path(self.config.data.prs_pcs)
         print(f"Loading PCs from: {pcs_path}")
         if not os.path.exists(pcs_path):
             raise FileNotFoundError(f"Principal components file not found: {pcs_path}\n"
@@ -84,7 +79,7 @@ class GeneticsLoader(StaticDataLoader):
         pcs_df = pd.read_csv(pcs_path)
         
         # Select relevant columns from consensus
-        consensus_cols = ['PATNO', 'LRRK2', 'GBA', 'SNCA', 'PRKN', 'PATHVAR_COUNT']
+        consensus_cols = self.config.genetic_consensus
         if 'APOE' in consensus_df.columns:
             consensus_cols.append('APOE')
         consensus_df = consensus_df[consensus_cols]
@@ -137,53 +132,3 @@ class GeneticsLoader(StaticDataLoader):
         print(f"✓ Validation passed: {len(df)} unique patients")
         return True
 
-
-# ============================================================================
-# TESTING CODE - Run this file to test the loader
-# ============================================================================
-
-if __name__ == "__main__":
-    print("=" * 80)
-    print("Testing GeneticsLoader")
-    print("=" * 80)
-    
-    # This is a test - you'll need to adjust paths to your actual data
-    # Add parent directories to path for config import
-    import os
-    v1_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if v1_dir not in sys.path:
-        sys.path.insert(0, v1_dir)
-    from training.config import get_default_config
-    
-    config = get_default_config()
-    
-    # Create loader
-    loader = GeneticsLoader("../../ppmi_pd", config)
-    
-    try:
-        # Load data
-        genetics_df = loader.load()
-        
-        # Validate
-        loader.validate(genetics_df)
-        
-        # Get summary
-        summary = loader.get_summary(genetics_df)
-        print(f"\n✓ Genetics loader working!")
-        print(f"  Patients: {summary['n_rows']}")
-        print(f"  Features: {summary['n_columns']-1}")
-        print(f"  Columns: {', '.join(genetics_df.columns[:10].tolist())}...")
-        
-        # Show missingness
-        print(f"\nMissingness by column:")
-        missing = (genetics_df.isnull().sum() / len(genetics_df) * 100).sort_values(ascending=False)
-        for col, pct in missing.head(10).items():
-            print(f"  {col}: {pct:.1f}%")
-            
-    except FileNotFoundError as e:
-        print(f"\n⚠️  File not found: {e}")
-        print("Update the paths in config.py to match your data location")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()

@@ -529,6 +529,7 @@ tests/
 Install pytest and optional testing dependencies:
 
 ```bash
+conda activate sri_hri
 pip install pytest pytest-cov
 ```
 

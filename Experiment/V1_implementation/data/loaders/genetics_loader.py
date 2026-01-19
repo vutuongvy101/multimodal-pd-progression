@@ -37,6 +37,10 @@ class GeneticsLoader(StaticDataLoader):
         Returns:
             DataFrame with PATNO + all genetics features
         """
+        participant_df = self._load_and_filter_participants(
+            include_columns=['COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS', 'ENROLL_AGE']
+        )
+
         # Load genetic consensus
         consensus_path = self.resolve_path(self.config.data.genetic_consensus)
         print(f"Loading genetic consensus from: {consensus_path}")
@@ -68,8 +72,9 @@ class GeneticsLoader(StaticDataLoader):
         pcs_df = pcs_df[['PATNO'] + self.config.features.genetic_principal_components_features]
         
         # Merge all genetics data
-        genetics_df = consensus_df.merge(prs_df, on='PATNO', how='left')
-        genetics_df = genetics_df.merge(pcs_df, on='PATNO', how='left')
+        consensus_df = participant_df.merge(consensus_df, how='outer', on='PATNO')
+        genetics_df = consensus_df.merge(prs_df, on='PATNO', how='outer')
+        genetics_df = genetics_df.merge(pcs_df, on='PATNO', how='outer')
         
         print(f"✓ Loaded genetics data: {len(genetics_df)} patients, {len(genetics_df.columns)-1} features")
         

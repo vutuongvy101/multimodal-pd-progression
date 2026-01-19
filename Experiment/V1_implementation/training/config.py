@@ -304,8 +304,8 @@ class ModelConfig:
         return self.get_mlp_dims(modality='part1')
 
     # Prediction targets
-    predict_totals: List[str] = field(default_factory=lambda: ['NP3TOT'])
-    # Can predict: 'NP1TOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT' or all of them
+    predict_totals: List[str] = field(default_factory=lambda: ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
+    # All UPDRS totals: NP1RTOT (non-motor), NP2PTOT (motor ADL), NP3TOT (motor exam), NP4TOT (complications)
 
     # Prediction heads
     next_visit_hidden_dims: List[int] = field(default_factory=lambda: [128, 64])

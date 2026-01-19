@@ -47,7 +47,7 @@ class DemographicsLoader(StaticDataLoader):
         
         Args:
             df: Main dataframe to merge into
-            file_path: self.config.data.age_at_visit or self.config.data.participant_status or self.config.data.socio_economic ...
+            file_path: self.config.data.age_at_visit or self.config.data.socio_economic ...
             merge_columns: Columns to select from the CSV before merging
             how: Type of merge ('left', 'inner', 'outer')
         """

@@ -47,7 +47,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         try:
             part1_path = self.resolve_path(self.config.data.updrs_part1_ques)
             print(f"Loading UPDRS Part I from: {part1_path}")
-            part1_df = pd.read_csv(part1_path)
+            part1_df = pd.read_csv(part1_path, low_memory=False)
             part1_df = part1_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part1_questionnaire_features]
             print(f"  ✓ Part I: {len(part1_df)} visits, {len(self.config.features.part1_features)} features")
         except Exception as e:
@@ -57,7 +57,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         try:
             part1_path = self.resolve_path(self.config.data.updrs_part1)
             print(f"Loading UPDRS Part I from: {part1_path}")
-            part1_df = pd.read_csv(part1_path)
+            part1_df = pd.read_csv(part1_path, low_memory=False)
             part1_df = part1_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part1_uprs_features]
             print(f"  ✓ Part I: {len(part1_df)} visits, {len(self.config.features.part1_features)} features")
         except Exception as e:
@@ -67,7 +67,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         try:
             part2_path = self.resolve_path(self.config.data.updrs_part2)
             print(f"Loading UPDRS Part II from: {part2_path}")
-            part2_df = pd.read_csv(part2_path)
+            part2_df = pd.read_csv(part2_path, low_memory=False)
             part2_df = part2_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part2_features]
             print(f"  ✓ Part II: {len(part2_df)} visits, {len(self.config.features.part2_features)} features")
         except Exception as e:
@@ -77,7 +77,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         try:
             part3_path = self.resolve_path(self.config.data.updrs_part3)
             print(f"Loading UPDRS Part III from: {part3_path}")
-            part3_df = pd.read_csv(part3_path)
+            part3_df = pd.read_csv(part3_path, low_memory=False)
             # Include PDMEDYN (ON/OFF status) if available
             part3_cols = ['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part3_features
             if 'PDMEDYN' in part3_df.columns:
@@ -91,7 +91,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         try:
             part4_path = self.resolve_path(self.config.data.updrs_part4)
             print(f"Loading UPDRS Part IV from: {part4_path}")
-            part4_df = pd.read_csv(part4_path)
+            part4_df = pd.read_csv(part4_path, low_memory=False)
             part4_df = part4_df[['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.part4_features]
             print(f"  ✓ Part IV: {len(part4_df)} visits, {len(self.config.features.part4_features)} features")
         except Exception as e:

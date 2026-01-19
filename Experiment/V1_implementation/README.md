@@ -241,8 +241,7 @@ V1_implementation/
 │
 ├── data/                        # Data loading & processing
 │   ├── base_loader.py          # Base classes
-│   ├── data_integrator.py      # Combines all loaders
-│   ├── data_preparation.py     # Data preparation utilities
+│   ├── data_integrator.py      # Combines all loaders + feature vector creation
 │   ├── dataset.py              # PyTorch Dataset & DataLoader
 │   ├── __init__.py
 │   └── loaders/                # Individual data loaders
@@ -386,14 +385,46 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ OUTPUT: Dictionary with                                          │
+│ OUTPUT (prepare_final_dataset): Dictionary with                  │
 ├─────────────────────────────────────────────────────────────────┤
-│ - 'static': Patient-level features                              │
-│ - 'longitudinal': Visit-level features                          │
-│ - 'slopes': Patient-level progression slopes                    │
+│ - 'static': DataFrame (patient-level features)                  │
+│ - 'longitudinal': DataFrame (visit-level features)              │
+│ - 'slopes': DataFrame (patient-level progression slopes)        │
 │ - 'metadata': Summary statistics                                │
 └─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 4: Create Feature Vectors (REQUIRED)                       │
+│ (create_feature_vectors() - creates missing value masks)        │
+├─────────────────────────────────────────────────────────────────┤
+│ Converts DataFrame format to dataset format with:                │
+│   - Missing value masks (1=missing, 0=present)                  │
+│   - Per-patient static data: {'values': array, 'mask': array}   │
+│   - Per-patient longitudinal data: List of visit dicts          │
+│   - Slopes dictionary: {PATNO: slope_value}                     │
+│                                                                  │
+│ This format is ready for PPMILongitudinalDataset                │
+│ Note: Called automatically by create_dataloaders() if needed    │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 5: Create PyTorch Datasets & DataLoaders                   │
+│ (create_dataloaders() - handles train/val/test split)           │
+├─────────────────────────────────────────────────────────────────┤
+│ 1. Automatically calls create_feature_vectors() if needed       │
+│ 2. Splits patients into train/val/test                          │
+│ 3. Creates PPMILongitudinalDataset for each split               │
+│ 4. Returns DataLoaders ready for training                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+**Key Methods:**
+- `prepare_final_dataset()` - Main pipeline: loads data, computes slopes, returns DataFrames
+- `create_feature_vectors()` - Converts DataFrames to dataset format with missing value handling (REQUIRED for training)
+- `create_missingness_masks()` - Creates explicit masks for missing values (used internally)
+- `create_dataloaders()` - Creates train/val/test DataLoaders (automatically calls `create_feature_vectors()` if needed)
 
 ### Running the Data Pipeline
 
@@ -459,6 +490,17 @@ Raw PPMI CSV Files
                         │
                         ▼
         ┌───────────────────────────────┐
+        │   DataIntegrator              │
+        │   create_feature_vectors()    │
+        │   (REQUIRED for training)     │
+        ├───────────────────────────────┤
+        │ - Create missingness masks    │
+        │ - Convert to dataset format   │
+        │ - Per-patient data structure  │
+        └───────────────────────────────┘
+                        │
+                        ▼
+        ┌───────────────────────────────┐
         │   PPMILongitudinalDataset     │
         │   (PyTorch Dataset)           │
         ├───────────────────────────────┤
@@ -506,6 +548,56 @@ class MyLongitudinalLoader(LongitudinalDataLoader):
         df = self.compute_time_since_baseline(df)
         
         return df
+```
+
+### Converting DataFrames to Dataset Format
+
+For training or inference, you may need to convert DataFrame format to the structure expected by `PPMILongitudinalDataset`:
+
+```python
+from data.data_integrator import DataIntegrator
+
+integrator = DataIntegrator(config)
+
+# Option 1: Get DataFrames (for inspection, saving to CSV)
+prepared_data = integrator.prepare_final_dataset()
+# Returns: {'static': DataFrame, 'longitudinal': DataFrame, 'slopes': DataFrame, 'metadata': dict}
+
+# Option 2: Convert directly to dataset format (with missing value handling)
+feature_vectors = integrator.create_feature_vectors(prepared_data)
+# Returns: {'static_data': Dict[PATNO, {...}], 'longitudinal_data': Dict[PATNO, [...]], 'slopes': Dict[PATNO, float]}
+
+# Option 3: Auto-convert (calls prepare_final_dataset internally)
+feature_vectors = integrator.create_feature_vectors()
+```
+
+**Key differences:**
+- `prepare_final_dataset()` → Returns **DataFrames** (good for CSV export, inspection)
+- `create_feature_vectors()` → Returns **structured dicts** (good for PyTorch Dataset creation)
+
+The `create_feature_vectors()` method automatically:
+- Creates missing value masks (1 = missing, 0 = present)
+- Converts NaN values to 0.0
+- Structures data per-patient for `PPMILongitudinalDataset`
+
+**Important**: `create_feature_vectors()` is **REQUIRED** for training, not optional. It must be called to convert DataFrames (with NaN values) into the masked format that `PPMILongitudinalDataset` expects. The `create_dataloaders()` function automatically calls `create_feature_vectors()` if you pass in DataFrame format.
+
+### Creating DataLoaders for Training
+
+The `create_dataloaders()` function handles the complete pipeline:
+
+```python
+from data.data_integrator import DataIntegrator
+from data.dataset import create_dataloaders
+
+# Option 1: Pass DataFrames (create_feature_vectors called automatically)
+integrator = DataIntegrator(config)
+prepared_data = integrator.prepare_final_dataset()  # Returns DataFrames
+train_loader, val_loader, test_loader = create_dataloaders(prepared_data, config)
+
+# Option 2: Pass feature vectors (already masked)
+feature_vectors = integrator.create_feature_vectors(prepared_data)
+train_loader, val_loader, test_loader = create_dataloaders(feature_vectors, config)
 ```
 
 ---
@@ -605,8 +697,9 @@ trainer.train(max_epochs=100, early_stopping_patience=15)
 
 | Metric | Target | Interpretation |
 |--------|--------|----------------|
-| Next-visit MAE | < 5 points | On NP3TOT (primary outcome, 0-132 scale) |
-| Next-visit MAE | < 3 points | On NP1TOT, NP2TOT, NP4TOT (0-52, 0-24 scales) |
+| Next-visit MAE | < 5 points | On NP3TOT (primary motor outcome, 0-132 scale) |
+| Next-visit MAE | < 3 points | On NP1TOT, NP2TOT (0-52 scale) |
+| Next-visit MAE | < 2 points | On NP4TOT (0-24 scale) |
 | Slope correlation | r > 0.5 | With empirical slopes (NP3TOT most important) |
 | ON vs OFF gap | 5-10 points | NP3TOT medication effect (NP2TOT also shows effect) |
 

@@ -5,3 +5,6 @@ Experiment/Explore Attributes
 development/mssql_data
 .idea/
 Experiment/V1_implementation/data/data/
+# Python temp files
+__pycache__/
+*.pyc

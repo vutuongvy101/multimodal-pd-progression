@@ -63,12 +63,14 @@ class TestDataPreparation:
     
     @pytest.mark.requires_data
     def test_data_preparation_exists(self, skip_if_no_data):
-        """Test data preparation module can be imported"""
+        """Test data integrator has create_feature_vectors method"""
         try:
-            from data.data_preparation import prepare_data
-            assert prepare_data is not None or True  # Placeholder
+            from data.data_integrator import DataIntegrator
+            # Check that create_feature_vectors method exists
+            assert hasattr(DataIntegrator, 'create_feature_vectors')
+            assert hasattr(DataIntegrator, 'create_missingness_masks')
         except ImportError:
-            pytest.skip("Data preparation module not available")
+            pytest.skip("Data integrator module not available")
 
 
 # Integration tests (require actual data)

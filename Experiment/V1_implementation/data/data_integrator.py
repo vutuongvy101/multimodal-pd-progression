@@ -111,6 +111,43 @@ class DataIntegrator:
         df.reset_index(drop=True, inplace=True)
         
         return df
+    
+    def _merge_longitudinal_data(self, longitudinal_df: pd.DataFrame, new_df: pd.DataFrame, suffix: str) -> pd.DataFrame:
+        """
+        Helper method to merge additional longitudinal data into the main longitudinal DataFrame.
+        Handles duplicate months_since_baseline columns by filling missing values and dropping duplicates.
+        
+        Args:
+            longitudinal_df: Main longitudinal DataFrame to merge into
+            new_df: New DataFrame to merge (e.g., clinical_df, medication_df)
+            suffix: Suffix to use for duplicate columns (e.g., '_clinical', '_med', '_age')
+            
+        Returns:
+            Updated longitudinal_df with merged data
+        """
+        if len(new_df) > 0:
+            longitudinal_df = longitudinal_df.merge(
+                new_df,
+                on=['PATNO', 'EVENT_ID'],
+                how='outer',
+                suffixes=('', suffix)
+            )
+            # Keep the first months_since_baseline if there are duplicates
+            months_col = f'months_since_baseline{suffix}'
+            if months_col in longitudinal_df.columns:
+                # Ensure numeric types to avoid FutureWarning about downcasting
+                longitudinal_df['months_since_baseline'] = pd.to_numeric(
+                    longitudinal_df['months_since_baseline'], errors='coerce'
+                )
+                longitudinal_df[months_col] = pd.to_numeric(
+                    longitudinal_df[months_col], errors='coerce'
+                )
+                longitudinal_df['months_since_baseline'] = longitudinal_df['months_since_baseline'].fillna(
+                    longitudinal_df[months_col]
+                )
+                longitudinal_df = longitudinal_df.drop(months_col, axis=1)
+        
+        return longitudinal_df
         
     def load_all_data(self) -> Dict[str, pd.DataFrame]:
         """
@@ -156,46 +193,9 @@ class DataIntegrator:
         
         # Merge longitudinal data
         longitudinal_df = updrs_df.copy()
-        
-        if len(clinical_df) > 0:
-            longitudinal_df = longitudinal_df.merge(
-                clinical_df, 
-                on=['PATNO', 'EVENT_ID'], 
-                how='outer',
-                suffixes=('', '_clinical')
-            )
-            # Keep the first months_since_baseline if there are duplicates
-            if 'months_since_baseline_clinical' in longitudinal_df.columns:
-                longitudinal_df['months_since_baseline'] = longitudinal_df['months_since_baseline'].fillna(
-                    longitudinal_df['months_since_baseline_clinical']
-                )
-                longitudinal_df = longitudinal_df.drop('months_since_baseline_clinical', axis=1)
-        
-        if len(medication_df) > 0:
-            longitudinal_df = longitudinal_df.merge(
-                medication_df, 
-                on=['PATNO', 'EVENT_ID'], 
-                how='outer',
-                suffixes=('', '_med')
-            )
-            if 'months_since_baseline_med' in longitudinal_df.columns:
-                longitudinal_df['months_since_baseline'] = longitudinal_df['months_since_baseline'].fillna(
-                    longitudinal_df['months_since_baseline_med']
-                )
-                longitudinal_df = longitudinal_df.drop('months_since_baseline_med', axis=1)
-        
-        if len(age_at_visit_df) > 0:
-            longitudinal_df = longitudinal_df.merge(
-                age_at_visit_df, 
-                on=['PATNO', 'EVENT_ID'], 
-                how='outer',
-                suffixes=('', '_age')
-            )
-            if 'months_since_baseline_age' in longitudinal_df.columns:
-                longitudinal_df['months_since_baseline'] = longitudinal_df['months_since_baseline'].fillna(
-                    longitudinal_df['months_since_baseline_age']
-                )
-                longitudinal_df = longitudinal_df.drop('months_since_baseline_age', axis=1)
+        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, clinical_df, '_clinical')
+        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, medication_df, '_med')
+        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, age_at_visit_df, '_age')
         
         print(f"\n✓ Longitudinal data merged: {len(longitudinal_df)} visits, {len(longitudinal_df.columns)-3} features")
         print(f"  Visits per patient: {len(longitudinal_df) / longitudinal_df['PATNO'].nunique():.1f} average")
@@ -265,6 +265,183 @@ class DataIntegrator:
         
         return slopes_df
     
+    def create_missingness_masks(self, df: pd.DataFrame, feature_cols: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Create value and mask arrays for a set of features.
+        Handles missing values by creating explicit masks.
+        
+        Args:
+            df: DataFrame containing features
+            feature_cols: List of column names to extract
+            
+        Returns:
+            Tuple of (values, mask) arrays where mask is 1 for missing, 0 for present
+        """
+        values = df[feature_cols].values
+        mask = np.isnan(values).astype(np.float32)
+        
+        # Fill NaN with 0 (the mask tells the model it's missing)
+        values = np.nan_to_num(values, nan=0.0)
+        
+        return values, mask
+    
+    def create_feature_vectors(self, prepared_data: Dict = None) -> Dict:
+        """
+        Create feature vectors with missingness masks for model input.
+        Converts DataFrame format to the structure expected by PPMILongitudinalDataset.
+        
+        Args:
+            prepared_data: Optional dict with 'static', 'longitudinal', 'slopes' DataFrames.
+                          If None, calls prepare_final_dataset() internally.
+            
+        Returns:
+            Dict with:
+                - static_data: Dict[PATNO, {'values': np.array, 'mask': np.array}]
+                - longitudinal_data: Dict[PATNO, List[Dict]] - list of visits per patient
+                - slopes: Dict[PATNO, float] - progression slope per patient (uses NP3TOT_slope)
+        """
+        # If no prepared_data provided, use prepare_final_dataset output
+        if prepared_data is None:
+            prepared_data = self.prepare_final_dataset()
+        
+        static_df = prepared_data['static']
+        longitudinal_df = prepared_data['longitudinal']
+        slopes_df = prepared_data['slopes']
+        
+        # Static Features 
+        static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
+        
+        # Create per-patient static data
+        static_data = {}
+        for patno in static_df['PATNO'].unique():
+            patient_row = static_df[static_df['PATNO'] == patno].iloc[0]
+            
+            # Get feature columns (exclude PATNO)
+            feature_cols = [c for c in static_cols if c != 'PATNO']
+            values, mask = self.create_missingness_masks(
+                pd.DataFrame([patient_row]), 
+                feature_cols
+            )
+            
+            static_data[patno] = {
+                'values': values[0],  # Remove batch dimension
+                'mask': mask[0]
+            }
+        
+        # Longitudinal Features
+        longitudinal_data = {}
+        
+        if not longitudinal_df.empty:
+            # Get feature column lists from config
+            motor_cols = [c for c in self.config.features.motor_features if c in longitudinal_df.columns]
+            nonmotor_cols = [c for c in self.config.features.nonmotor_features if c in longitudinal_df.columns]
+            med_cols = [c for c in self.config.features.medication_features if c in longitudinal_df.columns]
+            
+            # Group by patient
+            for patno, group in longitudinal_df.groupby('PATNO'):
+                # Sort by time (months_since_baseline or EVENT_ID order)
+                if 'months_since_baseline' in group.columns:
+                    group = group.sort_values('months_since_baseline')
+                elif 'EVENT_ID' in group.columns:
+                    # Sort by visit order
+                    # SC and BL are both baseline (order 0), then V01-V25 are visits 1-25
+                    event_order = {'SC': 0, 'BL': 0}
+                    # Dynamically generate V01 through V25
+                    for i in range(1, 26):
+                        event_order[f'V{i:02d}'] = i
+                    group['_visit_order'] = group['EVENT_ID'].map(lambda x: event_order.get(x, 999))
+                    group = group.sort_values('_visit_order')
+                
+                visits = []
+                for _, visit_row in group.iterrows():
+                    visit_dict = {}
+                    
+                    # Motor features
+                    if motor_cols:
+                        motor_values, motor_mask = self.create_missingness_masks(
+                            pd.DataFrame([visit_row]),
+                            motor_cols
+                        )
+                        visit_dict['motor_values'] = motor_values[0]
+                        visit_dict['motor_mask'] = motor_mask[0]
+                    else:
+                        visit_dict['motor_values'] = np.array([])
+                        visit_dict['motor_mask'] = np.array([])
+                    
+                    # Non-motor features
+                    if nonmotor_cols:
+                        nonmotor_values, nonmotor_mask = self.create_missingness_masks(
+                            pd.DataFrame([visit_row]),
+                            nonmotor_cols
+                        )
+                        visit_dict['nonmotor_values'] = nonmotor_values[0]
+                        visit_dict['nonmotor_mask'] = nonmotor_mask[0]
+                    else:
+                        visit_dict['nonmotor_values'] = np.array([])
+                        visit_dict['nonmotor_mask'] = np.array([])
+                    
+                    # Medication features
+                    if med_cols:
+                        med_values, med_mask = self.create_missingness_masks(
+                            pd.DataFrame([visit_row]),
+                            med_cols
+                        )
+                        visit_dict['med_values'] = med_values[0]
+                        visit_dict['med_mask'] = med_mask[0]
+                    else:
+                        visit_dict['med_values'] = np.array([])
+                        visit_dict['med_mask'] = np.array([])
+                    
+                    # Time information
+                    if 'months_since_baseline' in visit_row:
+                        visit_dict['time_months'] = float(visit_row['months_since_baseline']) if pd.notna(visit_row['months_since_baseline']) else 0.0
+                    else:
+                        visit_dict['time_months'] = 0.0
+                    
+                    # UPDRS totals (targets for next-visit prediction)
+                    updrs_totals = self.config.features.all_updrs_totals
+                    updrs_values = []
+                    for total in updrs_totals:
+                        if total in visit_row:
+                            val = float(visit_row[total]) if pd.notna(visit_row[total]) else np.nan
+                        else:
+                            val = np.nan
+                        updrs_values.append(val)
+                    # Array of UPDRS totals: [NP1RTOT, NP2PTOT, NP3TOT, NP4TOT] from all_updrs_totals
+                    visit_dict['updrs_totals'] = np.array(updrs_values)  # [4]
+                    
+                    # Keep np3tot for backward compatibility (single value)
+                    visit_dict['np3tot'] = updrs_values[2] if len(updrs_values) > 2 else np.nan
+                    
+                    visits.append(visit_dict)
+                
+                longitudinal_data[patno] = visits
+        else:
+            # Empty longitudinal data - create empty structure
+            print("WARNING: No longitudinal data available")
+        
+        # Slopes - use NP3TOT_slope if available, otherwise -999
+        slopes = {}
+        if not slopes_df.empty:
+            for _, row in slopes_df.iterrows():
+                patno = row['PATNO']
+                # Use NP3TOT_slope (the main target for the model)
+                if 'NP3TOT_slope' in row and pd.notna(row['NP3TOT_slope']):
+                    slope_val = row['NP3TOT_slope']
+                else:
+                    slope_val = -999
+                slopes[patno] = float(slope_val)
+        else:
+            # If no slopes computed, mark all as unavailable (-999)
+            all_patnos = list(static_data.keys())
+            slopes = {patno: -999.0 for patno in all_patnos}
+        
+        return {
+            'static_data': static_data,
+            'longitudinal_data': longitudinal_data,
+            'slopes': slopes
+        }
+    
     def prepare_final_dataset(self) -> Dict:
         """
         Main integration pipeline
@@ -276,7 +453,7 @@ class DataIntegrator:
         print("DATA INTEGRATION PIPELINE")
         print("=" * 80)
         
-        # Load all data
+        # # Load all data
         data = self.load_all_data()
         
         # Compute slopes
@@ -342,7 +519,7 @@ if __name__ == "__main__":
     integrator = DataIntegrator(config)
     
     try:
-        # Run full pipeline
+        # Run pipeline prepare data
         final_data = integrator.prepare_final_dataset()
         
         # Save to CSV for inspection

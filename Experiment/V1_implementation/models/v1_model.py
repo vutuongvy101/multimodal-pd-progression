@@ -40,7 +40,7 @@ class V1MultimodalTransformer(nn.Module):
         3. Add time encoding
         4. Pass through Transformer encoder
         5. Make predictions via two heads:
-           - Next-visit NP3TOT
+           - Next-visit UPDRS totals (NP1TOT, NP2TOT, NP3TOT, NP4TOT)
            - Patient-level progression slope
     """
     
@@ -123,11 +123,13 @@ class V1MultimodalTransformer(nn.Module):
         )
         
         # 5. Prediction heads
+        n_targets = len(model_config.predict_totals)
         self.prediction_heads = MultiTaskHead(
             d_model,
-            model_config.next_visit_hidden_dims,
-            model_config.slope_hidden_dims,
-            model_config.dropout,
+            n_targets=n_targets,
+            next_visit_hidden=model_config.next_visit_hidden_dims,
+            slope_hidden=model_config.slope_hidden_dims,
+            dropout=model_config.dropout,
             pooling='mean'
         )
         
@@ -161,7 +163,7 @@ class V1MultimodalTransformer(nn.Module):
             
         Returns:
             dict with:
-                - 'next_visit': [batch, seq_len] - predicted NP3TOT for next visit
+                - 'next_visit': [batch, seq_len, n_targets] - predicted UPDRS totals for next visit
                 - 'slope': [batch] - predicted progression slope
                 - 'hidden_states': [batch, seq_len, d_model] - transformer outputs
         """
@@ -212,31 +214,31 @@ class V1MultimodalTransformer(nn.Module):
         
         Args:
             predictions: dict from forward pass
-            targets: dict with 'next_visit' [batch, seq_len] and 'slope' [batch]
+            targets: dict with 'next_visit' [batch, seq_len, n_targets] and 'slope' [batch]
             attention_mask: [batch, seq_len] - 1 for valid positions
             lambda_slope: weight for slope loss
             
         Returns:
             dict with 'loss', 'loss_next_visit', 'loss_slope'
         """
-        # Next-visit prediction loss
-        next_visit_preds = predictions['next_visit']  # [batch, seq_len]
-        next_visit_targets = targets['next_visit']  # [batch, seq_len]
+        # Next-visit prediction loss (multiple UPDRS totals)
+        next_visit_preds = predictions['next_visit']  # [batch, seq_len, n_targets]
+        next_visit_targets = targets['next_visit']  # [batch, seq_len, n_targets]
         
         if attention_mask is not None:
             # Only compute loss for valid positions
             # Shift mask by 1 (predicting t+1 from t)
-            valid_mask = attention_mask[:, :-1]  # Can't predict beyond last visit
-            next_visit_preds = next_visit_preds[:, :-1]
-            next_visit_targets = next_visit_targets[:, 1:]  # Targets are shifted
+            valid_mask = attention_mask[:, :-1].unsqueeze(-1)  # [batch, seq_len-1, 1] for broadcasting
+            next_visit_preds = next_visit_preds[:, :-1, :]  # [batch, seq_len-1, n_targets]
+            next_visit_targets = next_visit_targets[:, 1:, :]  # [batch, seq_len-1, n_targets] - Targets are shifted
             
-            # Masked MSE
-            mse = (next_visit_preds - next_visit_targets) ** 2
-            loss_next_visit = (mse * valid_mask).sum() / valid_mask.sum().clamp(min=1)
+            # Masked MSE across all targets
+            mse = (next_visit_preds - next_visit_targets) ** 2  # [batch, seq_len-1, n_targets]
+            loss_next_visit = (mse * valid_mask).sum() / (valid_mask.sum() * next_visit_preds.shape[-1]).clamp(min=1)
         else:
-            # Simple MSE without mask
-            next_visit_preds = next_visit_preds[:, :-1]
-            next_visit_targets = next_visit_targets[:, 1:]
+            # Simple MSE without mask (averaged across all targets)
+            next_visit_preds = next_visit_preds[:, :-1, :]  # [batch, seq_len-1, n_targets]
+            next_visit_targets = next_visit_targets[:, 1:, :]  # [batch, seq_len-1, n_targets]
             loss_next_visit = nn.functional.mse_loss(next_visit_preds, next_visit_targets)
         
         # Slope prediction loss
@@ -337,8 +339,9 @@ if __name__ == "__main__":
     
     # Test loss computation
     print("\nTesting loss computation...")
+    n_targets = len(config.model.predict_totals)
     targets = {
-        'next_visit': torch.randn(batch_size, seq_len) * 10 + 30,  # Simulate NP3TOT
+        'next_visit': torch.randn(batch_size, seq_len, n_targets),  # Simulate all UPDRS totals
         'slope': torch.randn(batch_size) * 0.5  # Simulate slopes
     }
     

@@ -295,31 +295,3 @@ class V1Trainer:
         # Save training history
         with open(self.save_dir / 'training_history.json', 'w') as f:
             json.dump(self.training_history, f, indent=2)
-
-
-if __name__ == "__main__":
-    print("V1 Model Training Script")
-    print("=" * 80)
-    
-    # Load config
-    config = get_default_config()
-    
-    # Create model
-    print("\nCreating model...")
-    model = V1MultimodalTransformer(config)
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    
-    # Load data
-    print("\nLoading data...")
-    print("WARNING: Data loading not yet implemented")
-    print("You need to:")
-    print("  1. Prepare your data using data_preparation.py")
-    print("  2. Create train/val/test dataloaders")
-    print("  3. Pass them to the Trainer")
-    
-    # Example usage (once data is ready):
-    # from data.dataset import create_dataloaders
-    # train_loader, val_loader, test_loader = create_dataloaders(prepared_data, config)
-    # 
-    # trainer = V1Trainer(model, config, train_loader, val_loader, device='cuda')
-    # trainer.train(max_epochs=100, early_stopping_patience=15)

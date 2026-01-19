@@ -9,17 +9,21 @@ from typing import List
 
 class NextVisitPredictionHead(nn.Module):
     """
-    Predicts next visit NP3TOT score from current visit hidden state
+    Predicts next visit UPDRS totals from current visit hidden state
+    Supports predicting multiple totals: NP1TOT, NP2TOT, NP3TOT, NP4TOT
     """
     
-    def __init__(self, d_model: int, hidden_dims: List[int] = [128, 64], dropout: float = 0.1):
+    def __init__(self, d_model: int, n_targets: int = 4, hidden_dims: List[int] = [128, 64], dropout: float = 0.1):
         """
         Args:
             d_model: Input dimension (from transformer)
+            n_targets: Number of UPDRS totals to predict (default: 4)
             hidden_dims: Hidden layer dimensions
             dropout: Dropout rate
         """
         super().__init__()
+        
+        self.n_targets = n_targets
         
         layers = []
         prev_dim = d_model
@@ -33,21 +37,21 @@ class NextVisitPredictionHead(nn.Module):
             ])
             prev_dim = hidden_dim
         
-        # Output layer: single value (NP3TOT prediction)
-        layers.append(nn.Linear(prev_dim, 1))
+        # Output layer: n_targets values (one per UPDRS total)
+        layers.append(nn.Linear(prev_dim, n_targets))
         
         self.mlp = nn.Sequential(*layers)
-        
+    
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """
         Args:
             hidden_states: [batch, seq_len, d_model] - from transformer
             
         Returns:
-            predictions: [batch, seq_len, 1] - predicted NP3TOT for next visit
+            predictions: [batch, seq_len, n_targets] - predicted UPDRS totals for next visit
         """
-        predictions = self.mlp(hidden_states)
-        return predictions.squeeze(-1)  # [batch, seq_len]
+        predictions = self.mlp(hidden_states)  # [batch, seq_len, n_targets]
+        return predictions
 
 
 class ProgressionSlopeHead(nn.Module):
@@ -137,6 +141,7 @@ class MultiTaskHead(nn.Module):
     def __init__(
         self,
         d_model: int,
+        n_targets: int = 4,
         next_visit_hidden: List[int] = [128, 64],
         slope_hidden: List[int] = [128, 64],
         dropout: float = 0.1,
@@ -145,6 +150,7 @@ class MultiTaskHead(nn.Module):
         """
         Args:
             d_model: Input dimension
+            n_targets: Number of UPDRS totals to predict (default: 4)
             next_visit_hidden: Hidden dims for next-visit head
             slope_hidden: Hidden dims for slope head
             dropout: Dropout rate
@@ -152,9 +158,10 @@ class MultiTaskHead(nn.Module):
         """
         super().__init__()
         
-        self.next_visit_head = NextVisitPredictionHead(d_model, next_visit_hidden, dropout)
+        self.n_targets = n_targets
+        self.next_visit_head = NextVisitPredictionHead(d_model, n_targets, next_visit_hidden, dropout)
         self.slope_head = ProgressionSlopeHead(d_model, slope_hidden, dropout, pooling)
-        
+    
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor = None):
         """
         Args:
@@ -164,11 +171,11 @@ class MultiTaskHead(nn.Module):
         Returns:
             dict with 'next_visit' and 'slope' predictions
         """
-        next_visit_preds = self.next_visit_head(hidden_states)
-        slope_preds = self.slope_head(hidden_states, attention_mask)
+        next_visit_preds = self.next_visit_head(hidden_states)  # [batch, seq_len, n_targets]
+        slope_preds = self.slope_head(hidden_states, attention_mask)  # [batch]
         
         return {
-            'next_visit': next_visit_preds,  # [batch, seq_len]
+            'next_visit': next_visit_preds,  # [batch, seq_len, n_targets]
             'slope': slope_preds  # [batch]
         }
 
@@ -194,10 +201,11 @@ if __name__ == "__main__":
     print(f"Valid positions per sequence: {attention_mask.sum(dim=1).tolist()}")
     
     # Test next-visit head
-    next_visit_head = NextVisitPredictionHead(d_model, [128, 64])
+    n_targets = 4  # NP1TOT, NP2TOT, NP3TOT, NP4TOT
+    next_visit_head = NextVisitPredictionHead(d_model, n_targets, [128, 64])
     next_visit_preds = next_visit_head(hidden_states)
     print(f"\nNext-visit predictions shape: {next_visit_preds.shape}")
-    print(f"Sample predictions: {next_visit_preds[0, :5].tolist()}")
+    print(f"Sample predictions (first visit, all 4 totals): {next_visit_preds[0, 0, :].tolist()}")
     
     # Test slope head with different pooling methods
     for pooling in ['mean', 'last', 'max']:
@@ -209,7 +217,7 @@ if __name__ == "__main__":
     # Test multi-task head
     print("\n" + "="*80)
     print("Testing multi-task head...")
-    multi_head = MultiTaskHead(d_model, [128, 64], [128, 64], pooling='mean')
+    multi_head = MultiTaskHead(d_model, n_targets, [128, 64], [128, 64], pooling='mean')
     outputs = multi_head(hidden_states, attention_mask)
     
     print(f"\nMulti-task outputs:")

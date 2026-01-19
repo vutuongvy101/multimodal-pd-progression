@@ -8,3 +8,4 @@ Experiment/V1_implementation/data/data/
 # Python temp files
 __pycache__/
 *.pyc
+.DS_Store

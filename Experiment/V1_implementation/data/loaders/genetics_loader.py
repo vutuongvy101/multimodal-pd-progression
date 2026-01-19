@@ -72,9 +72,9 @@ class GeneticsLoader(StaticDataLoader):
         pcs_df = pcs_df[['PATNO'] + self.config.features.genetic_principal_components_features]
         
         # Merge all genetics data
-        consensus_df = participant_df.merge(consensus_df, how='outer', on='PATNO')
-        genetics_df = consensus_df.merge(prs_df, on='PATNO', how='outer')
-        genetics_df = genetics_df.merge(pcs_df, on='PATNO', how='outer')
+        consensus_df = participant_df.merge(consensus_df, how='left', on='PATNO')
+        genetics_df = consensus_df.merge(prs_df, on='PATNO', how='left')
+        genetics_df = genetics_df.merge(pcs_df, on='PATNO', how='left')
         
         print(f"✓ Loaded genetics data: {len(genetics_df)} patients, {len(genetics_df.columns)-1} features")
         

@@ -456,9 +456,6 @@ class DataIntegrator:
         # # Load all data
         data = self.load_all_data()
         
-        # Compute slopes
-        slopes_df = self.compute_progression_slopes(data['longitudinal'])
-        
         # Filter to only patients with both static and longitudinal data
         patients_with_both = set(data['static']['PATNO']) & set(data['longitudinal']['PATNO'])
         print(f"\n--- Filtering to Complete Cases ---")
@@ -468,8 +465,9 @@ class DataIntegrator:
         
         data['static'] = data['static'][data['static']['PATNO'].isin(patients_with_both)]
         data['longitudinal'] = data['longitudinal'][data['longitudinal']['PATNO'].isin(patients_with_both)]
-        
-        # Add slopes to output
+
+        # Compute slopes
+        slopes_df = self.compute_progression_slopes(data['longitudinal'])
         data['slopes'] = slopes_df
         
         # Create metadata

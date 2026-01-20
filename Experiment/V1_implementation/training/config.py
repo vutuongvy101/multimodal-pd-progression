@@ -286,7 +286,14 @@ class ModelConfig:
     n_layers: int = 4
     dropout: float = 0.1
     dim_feedforward: int = 1024
-    activation: str = 'gelu'
+    activation: str = 'gelu' # this is told better than RELU in Transformer
+
+    # Modality selection: which modalities to include in the model
+    # Options: 'static', 'motor', 'nonmotor', 'medication'
+    # This enables ablation studies and modality-specific experiments
+    enabled_modalities: List[str] = field(default_factory=lambda: [
+        'static', 'motor', 'nonmotor', 'medication'
+    ])
 
     # Modality MLP dimensions
     # Set to None to auto-calculate from feature counts, or provide explicit dimensions
@@ -507,49 +514,3 @@ def get_default_config() -> Config:
         training=TrainingConfig(),
         data=DataConfig()
     )
-
-
-if __name__ == "__main__":
-    # Print configuration
-    config = get_default_config()
-
-    print("=" * 80)
-    print("V1 Model Configuration")
-    print("=" * 80)
-
-    print("\n--- Feature Configuration ---")
-    print(f"Static features: {len(config.features.static_features)}")
-    print(f"Part I (non-motor): {len(config.features.part1_features)}")
-    print(f"Part II (motor ADL): {len(config.features.part2_features)}")
-    print(f"Part III (motor exam): {len(config.features.part3_features)}")
-    print(f"Part IV (complications): {len(config.features.part4_features)}")
-    print(f"Other non-motor: {len(config.features.other_nonmotor_features)}")
-    print(f"Medication context: {len(config.features.medication_features)}")
-    print(f"UPDRS totals: {', '.join(config.features.all_updrs_totals)}")
-
-    print("\n--- Model Configuration ---")
-    print(f"d_model: {config.model.d_model}")
-    print(f"n_heads: {config.model.n_heads}")
-    print(f"n_layers: {config.model.n_layers}")
-    print(f"max_seq_len: {config.model.max_seq_len}")
-
-    print("\n--- MLP Dimensions (Auto-calculated) ---")
-    modality_map = {
-        'static': 'static_features',
-        'part1': 'part1_features',
-        'part2': 'part2_features',
-        'part3': 'part3_features',
-        'part4': 'part4_features',
-        'med': 'medication_features',
-        'other': 'other_nonmotor_features',
-    }
-    for mod, attr_name in modality_map.items():
-        n_features = len(getattr(config.features, attr_name))
-        mlp_dims = config.model.get_mlp_dims(modality=mod)
-        print(f"{mod:8s}: {n_features:3d} features → {mlp_dims}")
-
-    print("\n--- Training Configuration ---")
-    print(f"batch_size: {config.training.batch_size}")
-    print(f"learning_rate: {config.training.learning_rate}")
-    print(f"lambda_slope: {config.training.lambda_slope}")
-    print(f"max_epochs: {config.training.max_epochs}")

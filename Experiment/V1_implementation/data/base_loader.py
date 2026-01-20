@@ -11,6 +11,48 @@ from typing import Dict, List, Optional, Any
 from training.config import Config
 
 
+# ============================================================================
+# Standalone utility functions for participant filtering
+# Shared across BaseDataLoader and DataIntegrator
+# ============================================================================
+
+def filter_valid_participants(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    This is a standardized function used by all loaders to ensure consistent
+    participant filtering from participant_status DataFrame
+    
+    Args:
+        df: DataFrame from participant_status file
+        
+    Returns:
+        Filtered DataFrame with valid participants only
+    """
+    # Remove participants with null ENROLL_DATE
+    df = df.dropna(subset=['ENROLL_DATE'])
+
+    # Keep only participants with valid enrollment status
+    valid_statuses = [
+        'Complete', 
+        'Enrolled', 
+        'Withdraw Deceased', 
+        'Withdrew'
+    ]
+    df = df[df['ENROLL_STATUS'].isin(valid_statuses)]
+
+    # Exclude SWEDD cohort
+    valid_cohorts = [
+        'Healthy Control', 
+        "Parkinson's Disease", 
+        'Prodromal'
+    ]
+    df = df[df['COHORT_DEFINITION'].isin(valid_cohorts)]
+
+    # Reset index for a clean dataframe
+    df.reset_index(drop=True, inplace=True)
+    
+    return df
+
+
 class BaseDataLoader(ABC):
     """
     Abstract base class for all data loaders
@@ -62,23 +104,6 @@ class BaseDataLoader(ABC):
         """
         pass
     
-    def get_summary(self, df: pd.DataFrame) -> Dict:
-        """
-        Get summary statistics for the loaded data
-        
-        Args:
-            df: DataFrame to summarize
-            
-        Returns:
-            Dictionary with summary information
-        """
-        return {
-            'n_rows': len(df),
-            'n_columns': len(df.columns),
-            'columns': df.columns.tolist(),
-            'missing_pct': df.isnull().sum() / len(df) * 100
-        }
-    
     def resolve_path(self, file_path: str) -> str:
         """
         Resolve file path, handling relative paths that start with ../
@@ -107,107 +132,77 @@ class BaseDataLoader(ABC):
         
         return resolved
     
-    def _filter_valid_participants(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Filter valid participants from participant_status DataFrame.
-        This is a standardized method used by all loaders to ensure consistent
-        participant filtering.
-        
-        Args:
-            df: DataFrame from participant_status file
-            
-        Returns:
-            Filtered DataFrame with valid participants only
-        """
-        # Remove participants with null ENROLL_DATE
-        df = df.dropna(subset=['ENROLL_DATE'])
-
-        # Keep only participants with valid enrollment status
-        valid_statuses = [
-            'Complete', 
-            'Enrolled', 
-            'Withdraw Deceased', 
-            'Withdrew'
-        ]
-        df = df[df['ENROLL_STATUS'].isin(valid_statuses)]
-
-        # Exclude SWEDD cohort
-        valid_cohorts = [
-            'Healthy Control', 
-            "Parkinson's Disease", 
-            'Prodromal'
-        ]
-        df = df[df['COHORT_DEFINITION'].isin(valid_cohorts)]
-    
-        # Reset index for a clean dataframe
-        df.reset_index(drop=True, inplace=True)
-        
-        return df
-    
     def _load_and_filter_participants(self, include_columns: Optional[List[str]] = None) -> pd.DataFrame:
         """
-        Load participant_status file and filter to valid participants.
+        Load participant_status file and filter to valid participants(cached).
         All loaders should use this method to ensure consistent participant filtering.
-        
-        Uses cached valid_participants if provided during initialization to avoid
-        multiple file loads. Uses self.config (stored in base class) as the only source of truth.
-        
+
         Args:
             include_columns: Optional list of columns to include from participant_status.
-                           If None, returns only PATNO column. If specified, returns
-                           PATNO plus these columns.
         
         Returns:
-            DataFrame with valid participants (PATNO + optionally other columns)
+            DataFrame with valid participants (PATNO + optionally include_columns)
         """
-        # Use cached participants if available
-        if self._valid_participants_cache is not None:
-            df = self._valid_participants_cache.copy()
-        else:
-            # Load participant status (only if not cached)
-            # Use self.config from base class - single source of truth
+        if self._valid_participants_cache is None:
             if not hasattr(self, 'config') or self.config is None:
                 raise ValueError("config must be provided during initialization")
             
-            status_path = self.resolve_path(self.config.data.participant_status)
-            print(f"Loading participant status from: {status_path}")
-            if not os.path.exists(status_path):
-                raise FileNotFoundError(f"Participant status file not found: {status_path}\n"
-                                      f"  Checked: {os.path.abspath(status_path)}")
-            df = pd.read_csv(status_path)
+            participant_status_path = self.resolve_path(self.config.data.participant_status)
+            print(f"Loading participant status from: {participant_status_path}")
             
-            # Filter valid participants
-            df = self._filter_valid_participants(df)
+            if not os.path.exists(participant_status_path):
+                raise FileNotFoundError(
+                    f"Participant status file not found: {participant_status_path}\n"
+                    f"  Checked: {os.path.abspath(participant_status_path)}"
+                )
             
-            # Cache for future use
+            df = pd.read_csv(participant_status_path)
+            df = filter_valid_participants(df)
             self._valid_participants_cache = df.copy()
+        else:
+            df = self._valid_participants_cache.copy()
         
         # Select columns to return
-        if include_columns is None:
-            # Return only PATNO
-            df = df[['PATNO']].copy()
-        else:
-            # Ensure PATNO is included
-            columns_to_keep = ['PATNO'] + [col for col in include_columns if col in df.columns and col != 'PATNO']
-            df = df[columns_to_keep].copy()
-        
-        return df
+        cols = ['PATNO'] + [c for c in (include_columns or []) if c in df.columns and c != 'PATNO']
+        return df[cols].copy()
 
 
 class StaticDataLoader(BaseDataLoader):
     """Base class for loaders that provide static (patient-level) data"""
-    
-    def get_merge_key(self) -> List[str]:
-        """Get columns to merge on (typically ['PATNO'])"""
-        return ['PATNO']
 
 
 class LongitudinalDataLoader(BaseDataLoader):
     """Base class for loaders that provide time-varying (visit-level) data"""
-    
-    def get_merge_key(self) -> List[str]:
-        """Get columns to merge on (typically ['PATNO', 'EVENT_ID'])"""
-        return ['PATNO', 'EVENT_ID']
+
+    @abstractmethod
+    def _load_raw(self) -> pd.DataFrame:
+        """Load the raw longitudinal data (subclasses implement)."""
+        raise NotImplementedError
+
+    def load(self) -> pd.DataFrame:
+        """
+        Standard longitudinal pipeline:
+        - load raw
+        - filter to valid participants
+        - filter to patients with >= min_visits
+        - compute months_since_baseline
+        """
+        df = self._load_raw()
+
+        # Allow loaders to return empty/optional data without crashing the pipeline
+        if df is None or len(df) == 0:
+            return df if df is not None else pd.DataFrame()
+
+        df = self.filter_by_valid_participants(df)
+
+        min_visits = getattr(getattr(self.config, "training", None), "min_visits_for_slope", 3)
+        df = self.filter_by_min_visits(df, min_visits=min_visits)
+
+        if "INFODT" in df.columns:
+            df = self.compute_time_since_baseline(df)
+
+        return df
+
     
     def filter_by_valid_participants(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -304,5 +299,12 @@ class LongitudinalDataLoader(BaseDataLoader):
             else None,
             axis=1
         )
+
+        # Guardrail: some records can have visit dates earlier than the recorded baseline date,
+        # which yields negative months. For downstream modeling/tests we treat those as baseline (0).
+        df['months_since_baseline'] = pd.to_numeric(df['months_since_baseline'], errors='coerce')
+        df.loc[df['months_since_baseline'].notna(), 'months_since_baseline'] = df.loc[
+            df['months_since_baseline'].notna(), 'months_since_baseline'
+        ].clip(lower=0.0)
         
         return df

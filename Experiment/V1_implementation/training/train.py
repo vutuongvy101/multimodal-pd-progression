@@ -110,9 +110,10 @@ class V1Trainer:
                     batch['attention_mask']
                 )
                 
-                # Compute loss
+                # Compute loss with label availability mask
                 targets = {
                     'next_visit': batch['next_visit_targets'],
+                    'next_visit_mask': batch.get('next_visit_label_mask'),  # Label availability mask (B)
                     'slope': batch['slope_targets']
                 }
                 
@@ -178,9 +179,10 @@ class V1Trainer:
                 batch['attention_mask']
             )
             
-            # Compute loss
+            # Compute loss with label availability mask
             targets = {
                 'next_visit': batch['next_visit_targets'],
+                'next_visit_mask': batch.get('next_visit_label_mask'),  # Label availability mask (B)
                 'slope': batch['slope_targets']
             }
             

@@ -47,9 +47,14 @@ class TestLoaderInterface:
         assert callable(loader.validate)
     
     def test_loader_summary(self, test_config):
-        """Test that loaders have get_summary method"""
+        """Test that our test-only summary helper works on a real loader output"""
         from data.loaders.demographics_loader import DemographicsLoader
+        from tests.utils.summary import get_df_summary
         
         loader = DemographicsLoader(test_config.data.base_dir, test_config)
-        assert hasattr(loader, 'get_summary')
-        assert callable(loader.get_summary)
+        df = loader.load()
+        summary = get_df_summary(df)
+        
+        assert summary['n_rows'] >= 0
+        assert summary['n_columns'] >= 0
+        assert isinstance(summary['columns'], list)

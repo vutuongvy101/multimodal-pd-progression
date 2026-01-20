@@ -81,7 +81,7 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
             if required:
                 raise
             return pd.DataFrame()
-    def load(self) -> pd.DataFrame:
+    def _load_raw(self) -> pd.DataFrame:
         """
         Load clinical assessments and merge them
         
@@ -102,7 +102,7 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
         if len(scopa_df) > 0:
             clinical_dfs.append(('SCOPA-AUT', scopa_df))
 
-        se_df = self.__load_data_file__('schwab_england', self.config.features.schwab_features, 'Schwab & England (ADL)', required=False)
+        se_df = self.__load_data_file__('schwab_england', self.config.features.schwab_england_features, 'Schwab & England (ADL)', required=False)
         if len(se_df) > 0:
             clinical_dfs.append(('Schwab & England', se_df))
 
@@ -116,9 +116,6 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
             else:
                 clinical_df = clinical_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
                 clinical_df = clinical_df.loc[:, ~clinical_df.columns.str.endswith('_dup')]
-
-        # Compute time since baseline
-        clinical_df = self.compute_time_since_baseline(clinical_df)
 
         print(f"✓ Merged clinical data: {len(clinical_df)} visits, {len(clinical_df.columns)-3} features")
         return clinical_df

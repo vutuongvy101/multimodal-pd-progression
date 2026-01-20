@@ -3,6 +3,7 @@ Task 5: Medication Data Loader
 Load medication information (LEDD, medication history, ON/OFF status)
 """
 
+import os
 import pandas as pd
 import numpy as np
 from typing import List
@@ -67,7 +68,7 @@ class MedicationLoader(LongitudinalDataLoader):
         except Exception:
             _log.exception(f"Unexpected error loading {file_name}")
             return pd.DataFrame()
-    def load(self) -> pd.DataFrame:
+    def _load_raw(self) -> pd.DataFrame:
         """
         Load medication data
         
@@ -75,7 +76,6 @@ class MedicationLoader(LongitudinalDataLoader):
             DataFrame with PATNO, EVENT_ID, months_since_baseline, and medication features
         """
         med_dfs = []
-        import os
 
         # Try to load a medication file defined in config first
         med_from_config = self.__load_data_file__('medication', self.config.features.medication_features, 'Medication (config)')
@@ -114,10 +114,6 @@ class MedicationLoader(LongitudinalDataLoader):
         for df in med_dfs[1:]:
             med_df = med_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
             med_df = med_df.loc[:, ~med_df.columns.str.endswith('_dup')]
-
-        # Compute time since baseline
-        if 'INFODT' in med_df.columns or 'EVENT_ID' in med_df.columns:
-            med_df = self.compute_time_since_baseline(med_df)
 
         print(f"✓ Medication data: {len(med_df)} visits, {len(med_df.columns)-3} features")
         return med_df

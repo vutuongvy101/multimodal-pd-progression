@@ -5,6 +5,8 @@ Tests for AgeAtVisitLoader
 import pytest
 import pandas as pd
 
+from tests.utils.summary import get_df_summary
+
 
 class TestAgeAtVisitLoader:
     """Test AgeAtVisitLoader"""
@@ -61,7 +63,7 @@ class TestAgeAtVisitLoaderIntegration:
         loader.validate(age_df)
         
         # Get summary
-        summary = loader.get_summary(age_df)
+        summary = get_df_summary(age_df)
         
         # Basic assertions
         assert 'PATNO' in age_df.columns

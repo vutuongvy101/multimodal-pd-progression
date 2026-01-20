@@ -5,6 +5,8 @@ Tests for UPDRSLoader
 import pytest
 import pandas as pd
 
+from tests.utils.summary import get_df_summary
+
 
 class TestUPDRSLoader:
     """Test UPDRSLoader"""
@@ -27,7 +29,7 @@ class TestUPDRSLoader:
         loader.validate(updrs_df)
         
         # Get summary
-        summary = loader.get_summary(updrs_df)
+        summary = get_df_summary(updrs_df)
         unique_patients = updrs_df['PATNO'].nunique()
         
         # Summary assertions
@@ -60,7 +62,7 @@ class TestUPDRSLoaderIntegration:
         loader.validate(updrs_df)
         
         # Get summary
-        summary = loader.get_summary(updrs_df)
+        summary = get_df_summary(updrs_df)
         unique_patients = updrs_df['PATNO'].nunique()
         
         # Summary assertions
@@ -73,8 +75,7 @@ class TestUPDRSLoaderIntegration:
         assert 'EVENT_ID' in updrs_df.columns or 'VISIT_ID' in updrs_df.columns
         
         # Check UPDRS Totals distribution (similar to __main__ block)
-        # NP1TOT, NP2TOT, NP3TOT, NP4TOT
-        totals = ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']
+        totals = test_config.features.all_updrs_totals
         totals_found = []
         for total in totals:
             if total in updrs_df.columns:

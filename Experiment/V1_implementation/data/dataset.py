@@ -45,7 +45,7 @@ class PPMILongitudinalDataset(Dataset):
         self.longitudinal_data = longitudinal_data
         self.slopes = slopes
         self.max_seq_len = max_seq_len
-        
+
     def __len__(self) -> int:
         return len(self.patient_ids)
     
@@ -60,8 +60,13 @@ class PPMILongitudinalDataset(Dataset):
             - med_values, med_mask
             - time_months
             - next_visit_targets [seq_len, 4] - UPDRS totals (NP1TOT, NP2TOT, NP3TOT, NP4TOT)
+            - next_visit_label_mask [seq_len, 4] - Label availability mask (1=present, 0=missing)
             - slope_target
             - seq_len (actual length before padding)
+        
+        Two types of masks:
+            A) Input missingness masks (motor_mask, etc.): "Is feature X observed at visit t?"
+            B) Label availability masks (next_visit_label_mask): "Is target Y available at visit t?"
         """
         patno = self.patient_ids[idx]
         
@@ -98,6 +103,14 @@ class PPMILongitudinalDataset(Dataset):
             updrs_totals = np.full((len(visits), 4), np.nan)
             updrs_totals[:, 2] = np3tot  # NP3TOT is at index 2
         
+        # Create label availability mask (Mask B)
+        # 1 = label present and valid, 0 = label missing (NaN)
+        # This mask is used in loss computation to exclude missing targets
+        label_mask = (~np.isnan(updrs_totals)).astype(np.float32)  # [seq_len, 4]
+        
+        # Fill NaN values with 0 (mask tells the model they're missing)
+        updrs_totals_filled = np.nan_to_num(updrs_totals, nan=0.0).astype(np.float32)
+        
         # Convert to tensors
         motor_values = torch.FloatTensor(np.array(motor_values))
         motor_mask = torch.FloatTensor(np.array(motor_mask))
@@ -106,7 +119,8 @@ class PPMILongitudinalDataset(Dataset):
         med_values = torch.FloatTensor(np.array(med_values))
         med_mask = torch.FloatTensor(np.array(med_mask))
         time_months = torch.FloatTensor(time_months)
-        next_visit_targets = torch.FloatTensor(updrs_totals)  # [seq_len, 4]
+        next_visit_targets = torch.FloatTensor(updrs_totals_filled)  # [seq_len, 4]
+        next_visit_label_mask = torch.FloatTensor(label_mask)  # [seq_len, 4]
         
         # Slope
         slope_target = torch.FloatTensor([self.slopes.get(patno, -999)])
@@ -122,15 +136,24 @@ class PPMILongitudinalDataset(Dataset):
             'med_mask': med_mask,
             'time_months': time_months,
             'next_visit_targets': next_visit_targets,
+            'next_visit_label_mask': next_visit_label_mask,  # NEW: Label availability mask
             'slope_target': slope_target,
             'seq_len': seq_len
         }
 
 
+# Backwards-compatible alias used in some tests
+PPMIDataset = PPMILongitudinalDataset
+
+
 def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     """
-    Collate function to handle variable-length sequences
-    Pads sequences to max length in batch
+    Collate function to handle variable-length sequences.
+    Pads sequences to max length in batch.
+    
+    Creates two types of masks:
+        - attention_mask: Which visit positions are valid (not padding)
+        - next_visit_label_mask: Which target labels are available (not NaN)
     """
     # Static features (no padding needed)
     static_values = torch.stack([item['static_values'] for item in batch])
@@ -153,9 +176,11 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     med_values_padded = torch.zeros(batch_size, max_len, n_med)
     med_mask_padded = torch.ones(batch_size, max_len, n_med)
     time_months_padded = torch.zeros(batch_size, max_len)
+    
     # next_visit_targets is now [seq_len, n_targets] where n_targets=4
     n_targets = batch[0]['next_visit_targets'].shape[-1] if len(batch[0]['next_visit_targets'].shape) > 1 else 1
     next_visit_targets_padded = torch.zeros(batch_size, max_len, n_targets)
+    next_visit_label_mask_padded = torch.zeros(batch_size, max_len, n_targets)  # NEW: 0 = label missing
     attention_mask = torch.zeros(batch_size, max_len)
     
     # Fill in actual values
@@ -168,14 +193,24 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         med_values_padded[i, :seq_len] = item['med_values']
         med_mask_padded[i, :seq_len] = item['med_mask']
         time_months_padded[i, :seq_len] = item['time_months']
+        
         # Handle both old format [seq_len] and new format [seq_len, n_targets]
         if len(item['next_visit_targets'].shape) == 1:
             # Old format - expand to [seq_len, 1]
             next_visit_targets_padded[i, :seq_len, 0] = item['next_visit_targets']
+            # For old format, assume all labels are available if value is not NaN
+            next_visit_label_mask_padded[i, :seq_len, 0] = (~torch.isnan(item['next_visit_targets'])).float()
         else:
             # New format [seq_len, n_targets]
             next_visit_targets_padded[i, :seq_len, :] = item['next_visit_targets']
-        attention_mask[i, :seq_len] = 1  # 1 = valid, 0 = padding
+            # Use the label mask from the item
+            if 'next_visit_label_mask' in item:
+                next_visit_label_mask_padded[i, :seq_len, :] = item['next_visit_label_mask']
+            else:
+                # Fallback: derive from non-NaN values
+                next_visit_label_mask_padded[i, :seq_len, :] = (~torch.isnan(item['next_visit_targets'])).float()
+        
+        attention_mask[i, :seq_len] = 1  # 1 = valid visit, 0 = padding
     
     # Slopes
     slope_targets = torch.stack([item['slope_target'] for item in batch]).squeeze(-1)
@@ -192,6 +227,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         'time_months': time_months_padded,
         'attention_mask': attention_mask,
         'next_visit_targets': next_visit_targets_padded,
+        'next_visit_label_mask': next_visit_label_mask_padded,  # NEW: Label availability mask
         'slope_targets': slope_targets
     }
 

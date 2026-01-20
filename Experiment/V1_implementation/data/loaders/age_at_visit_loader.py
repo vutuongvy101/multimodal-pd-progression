@@ -95,7 +95,7 @@ class AgeAtVisitLoader(LongitudinalDataLoader):
                 raise
             return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
         
-    def load(self) -> pd.DataFrame:
+    def _load_raw(self) -> pd.DataFrame:
         """
         Load age at visit data
         
@@ -109,6 +109,9 @@ class AgeAtVisitLoader(LongitudinalDataLoader):
             return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
         _LOG.info(f"✓ Loaded age_at_visit: {len(age_df)} records")
         return age_df
+
+    def load(self) -> pd.DataFrame:
+        return self._load_raw()
     
     def get_required_columns(self) -> List[str]:
         """Required columns in output"""

@@ -124,6 +124,7 @@ class GeneticsLoader(StaticDataLoader):
             merge_columns=pcs_cols,
             how='left'
         )
+        print(df.columns)
         
         print(f"✓ Loaded genetics data: {len(df)} patients, {len(df.columns)-1} features")
         

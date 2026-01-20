@@ -23,6 +23,8 @@ try:
     from data.loaders.clinical_loader import ClinicalAssessmentsLoader
     from data.loaders.medication_loader import MedicationLoader
     from data.loaders.age_at_visit_loader import AgeAtVisitLoader
+    from data.visit_index_builder import VisitIndexBuilder
+    from data.base_loader import filter_valid_participants
 except ImportError:
     # Fall back to direct imports if running from data/ directory
     from loaders.genetics_loader import GeneticsLoader
@@ -31,6 +33,8 @@ except ImportError:
     from loaders.clinical_loader import ClinicalAssessmentsLoader
     from loaders.medication_loader import MedicationLoader
     from loaders.age_at_visit_loader import AgeAtVisitLoader
+    from visit_index_builder import VisitIndexBuilder
+    from base_loader import filter_valid_participants
 
 
 class DataIntegrator:
@@ -66,8 +70,11 @@ class DataIntegrator:
         Load and filter participant_status once.
         This DataFrame is shared across all loaders to avoid multiple file loads.
         
+        Uses shared utility function filter_valid_participants() to ensure
+        consistent filtering logic with BaseDataLoader.
+        
         Returns:
-            DataFrame with filtered valid participants
+            DataFrame with filtered valid participants (all columns)
         """
         import os
         
@@ -79,36 +86,12 @@ class DataIntegrator:
                 return os.path.normpath(os.path.abspath(file_path))
             return os.path.normpath(os.path.join(self.base_dir, file_path))
         
-        # Load participant status
+        # Resolve participant status path
         status_path = resolve_path(config.data.participant_status)
-        if not os.path.exists(status_path):
-            raise FileNotFoundError(f"Participant status file not found: {status_path}\n"
-                                  f"  Checked: {os.path.abspath(status_path)}")
-        df = pd.read_csv(status_path)
         
-        # Filter valid participants (same logic as BaseDataLoader._filter_valid_participants)
-        # Remove participants with null ENROLL_DATE
-        df = df.dropna(subset=['ENROLL_DATE'])
-
-        # Keep only participants with valid enrollment status
-        valid_statuses = [
-            'Complete', 
-            'Enrolled', 
-            'Withdraw Deceased', 
-            'Withdrew'
-        ]
-        df = df[df['ENROLL_STATUS'].isin(valid_statuses)]
-
-        # Exclude SWEDD cohort
-        valid_cohorts = [
-            'Healthy Control', 
-            "Parkinson's Disease", 
-            'Prodromal'
-        ]
-        df = df[df['COHORT_DEFINITION'].isin(valid_cohorts)]
-    
-        # Reset index for a clean dataframe
-        df.reset_index(drop=True, inplace=True)
+        full_df = pd.read_csv(status_path)
+        # Use shared utility function from base_loader
+        df = filter_valid_participants(full_df)
         
         return df
     
@@ -269,6 +252,7 @@ class DataIntegrator:
         """
         Create value and mask arrays for a set of features.
         Handles missing values by creating explicit masks.
+        Converts non-numeric columns to numeric where possible.
         
         Args:
             df: DataFrame containing features
@@ -277,8 +261,32 @@ class DataIntegrator:
         Returns:
             Tuple of (values, mask) arrays where mask is 1 for missing, 0 for present
         """
-        values = df[feature_cols].values
-        mask = np.isnan(values).astype(np.float32)
+        # Extract only available columns
+        available_cols = [c for c in feature_cols if c in df.columns]
+        if not available_cols:
+            # Return empty arrays if no columns available
+            return np.array([]).reshape(len(df), 0).astype(np.float32), \
+                   np.array([]).reshape(len(df), 0).astype(np.float32)
+        
+        # Extract subset of DataFrame with only the features we need
+        feature_df = df[available_cols].copy()
+        
+        # Convert all columns to numeric, coercing errors to NaN
+        # This handles string columns, categoricals, etc.
+        for col in available_cols:
+            if feature_df[col].dtype == 'object':
+                # Try to convert to numeric
+                feature_df[col] = pd.to_numeric(feature_df[col], errors='coerce')
+            elif feature_df[col].dtype.name == 'category':
+                # Convert categorical to numeric codes
+                feature_df[col] = pd.to_numeric(feature_df[col].cat.codes, errors='coerce')
+        
+        # Now extract as numeric array
+        values = feature_df.values.astype(np.float32)
+        
+        # Create mask for missing values (handles NaN, None, etc.)
+        # Use pandas isna() which works for all dtypes, then convert to numpy
+        mask = feature_df.isna().values.astype(np.float32)
         
         # Fill NaN with 0 (the mask tells the model it's missing)
         values = np.nan_to_num(values, nan=0.0)
@@ -298,7 +306,9 @@ class DataIntegrator:
             Dict with:
                 - static_data: Dict[PATNO, {'values': np.array, 'mask': np.array}]
                 - longitudinal_data: Dict[PATNO, List[Dict]] - list of visits per patient
-                - slopes: Dict[PATNO, float] - progression slope per patient (uses NP3TOT_slope)
+                - slopes: Dict[PATNO, Dict[str, float]] - progression slopes per patient
+                         Keys: 'NP1RTOT_slope', 'NP2PTOT_slope', 'NP3TOT_slope', 'NP4TOT_slope'
+                         Values: slope value or -999 if not available
         """
         # If no prepared_data provided, use prepare_final_dataset output
         if prepared_data is None:
@@ -315,7 +325,6 @@ class DataIntegrator:
         static_data = {}
         for patno in static_df['PATNO'].unique():
             patient_row = static_df[static_df['PATNO'] == patno].iloc[0]
-            
             # Get feature columns (exclude PATNO)
             feature_cols = [c for c in static_cols if c != 'PATNO']
             values, mask = self.create_missingness_masks(
@@ -333,9 +342,26 @@ class DataIntegrator:
         
         if not longitudinal_df.empty:
             # Get feature column lists from config
-            motor_cols = [c for c in self.config.features.motor_features if c in longitudinal_df.columns]
-            nonmotor_cols = [c for c in self.config.features.nonmotor_features if c in longitudinal_df.columns]
-            med_cols = [c for c in self.config.features.medication_features if c in longitudinal_df.columns]
+            # Use getattr with defaults so tests can provide partial mock configs
+            motor_features = getattr(self.config.features, 'motor_features', [])
+            updrs_supplementary_features = getattr(self.config.features, 'updrs_supplementary_features', [])
+            clinical_features = getattr(self.config.features, 'clinical_features', [])
+            medication_features = getattr(self.config.features, 'medication_features', [])
+
+            # If a Mock() provides attributes but they aren't iterable lists, treat as empty.
+            if not isinstance(motor_features, (list, tuple, set)):
+                motor_features = []
+            if not isinstance(updrs_supplementary_features, (list, tuple, set)):
+                updrs_supplementary_features = []
+            if not isinstance(clinical_features, (list, tuple, set)):
+                clinical_features = []
+            if not isinstance(medication_features, (list, tuple, set)):
+                medication_features = []
+
+            motor_cols = [c for c in motor_features if c in longitudinal_df.columns]
+            updrs_supplementary_cols = [c for c in updrs_supplementary_features if c in longitudinal_df.columns]
+            clinical_cols = [c for c in clinical_features if c in longitudinal_df.columns]
+            med_cols = [c for c in medication_features if c in longitudinal_df.columns]
             
             # Group by patient
             for patno, group in longitudinal_df.groupby('PATNO'):
@@ -368,17 +394,29 @@ class DataIntegrator:
                         visit_dict['motor_values'] = np.array([])
                         visit_dict['motor_mask'] = np.array([])
                     
-                    # Non-motor features
-                    if nonmotor_cols:
-                        nonmotor_values, nonmotor_mask = self.create_missingness_masks(
+                    # UPDRS supplementary features
+                    if updrs_supplementary_cols:
+                        updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
                             pd.DataFrame([visit_row]),
-                            nonmotor_cols
+                            updrs_supplementary_cols
                         )
-                        visit_dict['nonmotor_values'] = nonmotor_values[0]
-                        visit_dict['nonmotor_mask'] = nonmotor_mask[0]
+                        visit_dict['updrs_supplementary_values'] = updrs_supplementary_values[0]
+                        visit_dict['updrs_supplementary_mask'] = updrs_supplementary_mask[0]
                     else:
-                        visit_dict['nonmotor_values'] = np.array([])
-                        visit_dict['nonmotor_mask'] = np.array([])
+                        visit_dict['updrs_supplementary_values'] = np.array([])
+                        visit_dict['updrs_supplementary_mask'] = np.array([])
+                    
+                    # Clinical features
+                    if clinical_cols:
+                        clinical_values, clinical_mask = self.create_missingness_masks(
+                            pd.DataFrame([visit_row]),
+                            clinical_cols
+                        )
+                        visit_dict['clinical_values'] = clinical_values[0]
+                        visit_dict['clinical_mask'] = clinical_mask[0]
+                    else:
+                        visit_dict['clinical_values'] = np.array([])
+                        visit_dict['clinical_mask'] = np.array([])
                     
                     # Medication features
                     if med_cols:
@@ -420,21 +458,30 @@ class DataIntegrator:
             # Empty longitudinal data - create empty structure
             print("WARNING: No longitudinal data available")
         
-        # Slopes - use NP3TOT_slope if available, otherwise -999
+        # Slopes - extract all UPDRS total slopes for each patient
         slopes = {}
+        all_patnos = list(static_data.keys())
+        
+        # Initialize all patients with -999 for all slopes
+        for patno in all_patnos:
+            slopes[patno] = {
+                f'{total}_slope': -999.0
+                for total in self.config.features.all_updrs_totals
+            }
+        
+        # Fill in computed slopes from slopes_df
         if not slopes_df.empty:
             for _, row in slopes_df.iterrows():
                 patno = row['PATNO']
-                # Use NP3TOT_slope (the main target for the model)
-                if 'NP3TOT_slope' in row and pd.notna(row['NP3TOT_slope']):
-                    slope_val = row['NP3TOT_slope']
-                else:
-                    slope_val = -999
-                slopes[patno] = float(slope_val)
-        else:
-            # If no slopes computed, mark all as unavailable (-999)
-            all_patnos = list(static_data.keys())
-            slopes = {patno: -999.0 for patno in all_patnos}
+                if patno not in slopes:
+                    continue
+                
+                # Extract slope for each UPDRS total
+                for total in self.config.features.all_updrs_totals:
+                    slope_col = f'{total}_slope'
+                    if slope_col in row and pd.notna(row[slope_col]):
+                        slopes[patno][slope_col] = float(row[slope_col])
+                    # else keep -999 (already initialized)
         
         return {
             'static_data': static_data,
@@ -494,58 +541,234 @@ class DataIntegrator:
         print(f"  UPDRS totals available: {', '.join(data['metadata']['updrs_totals'])}")
         
         return data
-
-
-# ============================================================================
-# MAIN EXECUTION
-# ============================================================================
-
-if __name__ == "__main__":
-    # Ensure parent directory is in path (already done above, but keep for clarity)
-    v1_dir = os.path.dirname(parent_dir)  # Go up one more level from data/ to V1_implementation/
-    if v1_dir not in sys.path:
-        sys.path.insert(0, v1_dir)
-    from training.config import get_default_config
     
-    print("=" * 80)
-    print("DATA INTEGRATOR - Final Integration")
-    print("=" * 80)
-    
-    config = get_default_config()
-    
-    # Create integrator
-    integrator = DataIntegrator(config)
-    
-    try:
-        # Run pipeline prepare data
-        final_data = integrator.prepare_final_dataset()
+    def create_feature_vectors_with_visit_index(self, prepared_data: Dict = None, min_visits: int = 2) -> Dict:
+        """
+        Create feature vectors using the VisitIndexBuilder for proper timeline management.
         
-        # Save to CSV for inspection
-        print("\n--- Saving Data ---")
-        output_dir = config.data.processed_data_dir
-        import os
-        os.makedirs(output_dir, exist_ok=True)
+        This method uses a master visit_index to:
+        1. Define the timeline independently of any modality
+        2. Align each modality to the timeline
+        3. Create proper input missingness masks (Mask A)
+        4. Create proper label availability masks (Mask B)
         
-        final_data['static'].to_csv(f"{output_dir}/static_data.csv", index=False)
-        final_data['longitudinal'].to_csv(f"{output_dir}/longitudinal_data.csv", index=False)
-        final_data['slopes'].to_csv(f"{output_dir}/slopes_data.csv", index=False)
+        Args:
+            prepared_data: Optional dict with raw DataFrames. If None, loads data.
+            min_visits: Minimum number of visits required per patient
+            
+        Returns:
+            Dict with:
+                - 'visit_index': Master timeline DataFrame
+                - 'static_data': Dict[PATNO, {'values': np.array, 'mask': np.array}]
+                - 'longitudinal_data': Dict[PATNO, List[Dict]] - aligned to visit_index
+                - 'slopes': Dict[PATNO, Dict[str, float]]
+        """
+        print("\n" + "=" * 80)
+        print("CREATING FEATURE VECTORS WITH VISIT INDEX")
+        print("=" * 80)
         
-        print(f"  ✓ Saved to {output_dir}/")
-        print(f"    - static_data.csv")
-        print(f"    - longitudinal_data.csv")
-        print(f"    - slopes_data.csv")
+        # Load raw data if not provided
+        if prepared_data is None:
+            # Load raw DataFrames from loaders
+            print("\n--- Loading Raw Data ---")
+            genetics_df = self.genetics_loader.load()
+            demographics_df = self.demographics_loader.load()
+            updrs_df = self.updrs_loader.load()
+            
+            try:
+                clinical_df = self.clinical_loader.load()
+            except Exception as e:
+                print(f"  ⚠️ Clinical data not available: {e}")
+                clinical_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
+            
+            try:
+                medication_df = self.medication_loader.load()
+            except Exception as e:
+                print(f"  ⚠️ Medication data not available: {e}")
+                medication_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
+            
+            try:
+                age_at_visit_df = self.age_at_visit_loader.load()
+            except Exception as e:
+                print(f"  ⚠️ Age at visit data not available: {e}")
+                age_at_visit_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
+            
+            # Static data
+            static_df = demographics_df.merge(genetics_df, on='PATNO', how='outer')
+        else:
+            # Use prepared data
+            static_df = prepared_data.get('static', pd.DataFrame())
+            updrs_df = prepared_data.get('longitudinal', pd.DataFrame())
+            clinical_df = prepared_data.get('clinical', pd.DataFrame(columns=['PATNO', 'EVENT_ID']))
+            medication_df = prepared_data.get('medication', pd.DataFrame(columns=['PATNO', 'EVENT_ID']))
+            age_at_visit_df = prepared_data.get('age_at_visit', pd.DataFrame(columns=['PATNO', 'EVENT_ID']))
         
-        print("\n✓ DATA INTEGRATION SUCCESSFUL!")
-        print("\nNext steps:")
-        print("  1. Inspect the saved CSV files")
-        print("  2. Check for missing data patterns")
-        print("  3. Proceed to dataset.py to create PyTorch DataLoaders")
+        # Build visit_index from all longitudinal sources
+        print("\n--- Building Visit Index (Master Timeline) ---")
+        visit_index_builder = VisitIndexBuilder(self.config)
         
-    except Exception as e:
-        print(f"\n❌ Error during integration: {e}")
-        import traceback
-        traceback.print_exc()
-        print("\nTroubleshooting:")
-        print("  1. Make sure all individual loaders work (test each separately)")
-        print("  2. Check that file paths in config.py are correct")
-        print("  3. Verify data format matches expected structure")
+        visit_index = visit_index_builder.build_from_sources(
+            source_dfs=[updrs_df, clinical_df, medication_df, age_at_visit_df],
+            valid_patnos=self.valid_participants['PATNO'].tolist()
+        )
+        
+        # Filter to patients with minimum visits
+        visit_index = visit_index_builder.filter_by_min_visits(visit_index, min_visits)
+        
+        # Get valid patient IDs from visit_index
+        valid_patnos = visit_index['PATNO'].unique()
+        
+        # Filter static data to match
+        static_df = static_df[static_df['PATNO'].isin(valid_patnos)]
+        
+        # Create static feature vectors
+        print("\n--- Creating Static Feature Vectors ---")
+        static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
+        static_data = {}
+        
+        for patno in valid_patnos:
+            patient_row = static_df[static_df['PATNO'] == patno]
+            if len(patient_row) == 0:
+                # Patient has no static data - create all-missing
+                static_data[patno] = {
+                    'values': np.zeros(len(static_cols), dtype=np.float32),
+                    'mask': np.ones(len(static_cols), dtype=np.float32)
+                }
+            else:
+                feature_cols = [c for c in static_cols if c != 'PATNO']
+                values, mask = self.create_missingness_masks(patient_row, feature_cols)
+                static_data[patno] = {
+                    'values': values[0],
+                    'mask': mask[0]
+                }
+        
+        print(f"  ✓ Static features: {len(static_cols)} features for {len(static_data)} patients")
+        
+        # Align modalities to visit_index
+        print("\n--- Aligning Modalities to Visit Index ---")
+        
+        motor_cols = [c for c in self.config.features.motor_features if c in updrs_df.columns]
+        updrs_supplementary_cols = [c for c in self.config.features.updrs_supplementary_features 
+                                   if c in updrs_df.columns]
+        clinical_cols = [c for c in self.config.features.clinical_features 
+                        if c in clinical_df.columns]
+        med_cols = [c for c in self.config.features.medication_features if c in medication_df.columns]
+        updrs_total_cols = self.config.features.all_updrs_totals
+        
+        # Create per-patient longitudinal data
+        longitudinal_data = {}
+        
+        for patno in valid_patnos:
+            patient_visits = visit_index[visit_index['PATNO'] == patno].sort_values('visit_order')
+            visits = []
+            
+            for _, visit_row in patient_visits.iterrows():
+                event_id = visit_row['EVENT_ID']
+                visit_dict = {}
+                
+                # Motor features from UPDRS
+                motor_visit = updrs_df[(updrs_df['PATNO'] == patno) & (updrs_df['EVENT_ID'] == event_id)]
+                if len(motor_visit) > 0 and motor_cols:
+                    motor_values, motor_mask = self.create_missingness_masks(motor_visit, motor_cols)
+                    visit_dict['motor_values'] = motor_values[0]
+                    visit_dict['motor_mask'] = motor_mask[0]
+                else:
+                    visit_dict['motor_values'] = np.zeros(len(motor_cols) if motor_cols else 0, dtype=np.float32)
+                    visit_dict['motor_mask'] = np.ones(len(motor_cols) if motor_cols else 0, dtype=np.float32)
+                
+                # UPDRS supplementary features from UPDRS
+                updrs_supplementary_visit = updrs_df[(updrs_df['PATNO'] == patno) & (updrs_df['EVENT_ID'] == event_id)]
+                if len(updrs_supplementary_visit) > 0 and updrs_supplementary_cols:
+                    updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(updrs_supplementary_visit, updrs_supplementary_cols)
+                    visit_dict['updrs_supplementary_values'] = updrs_supplementary_values[0]
+                    visit_dict['updrs_supplementary_mask'] = updrs_supplementary_mask[0]
+                else:
+                    visit_dict['updrs_supplementary_values'] = np.zeros(len(updrs_supplementary_cols) if updrs_supplementary_cols else 0, dtype=np.float32)
+                    visit_dict['updrs_supplementary_mask'] = np.ones(len(updrs_supplementary_cols) if updrs_supplementary_cols else 0, dtype=np.float32)
+                
+                # Clinical features from clinical assessments
+                clinical_visit = clinical_df[(clinical_df['PATNO'] == patno) & (clinical_df['EVENT_ID'] == event_id)] if len(clinical_df) > 0 else pd.DataFrame()
+                if len(clinical_visit) > 0 and clinical_cols:
+                    clinical_values, clinical_mask = self.create_missingness_masks(clinical_visit, clinical_cols)
+                    visit_dict['clinical_values'] = clinical_values[0]
+                    visit_dict['clinical_mask'] = clinical_mask[0]
+                else:
+                    visit_dict['clinical_values'] = np.zeros(len(clinical_cols) if clinical_cols else 0, dtype=np.float32)
+                    visit_dict['clinical_mask'] = np.ones(len(clinical_cols) if clinical_cols else 0, dtype=np.float32)
+                
+                # Medication features
+                med_visit = medication_df[(medication_df['PATNO'] == patno) & (medication_df['EVENT_ID'] == event_id)] if len(medication_df) > 0 else pd.DataFrame()
+                if len(med_visit) > 0 and med_cols:
+                    med_values, med_mask = self.create_missingness_masks(med_visit, med_cols)
+                    visit_dict['med_values'] = med_values[0]
+                    visit_dict['med_mask'] = med_mask[0]
+                else:
+                    visit_dict['med_values'] = np.zeros(len(med_cols) if med_cols else 0, dtype=np.float32)
+                    visit_dict['med_mask'] = np.ones(len(med_cols) if med_cols else 0, dtype=np.float32)
+                
+                # Time features from visit_index
+                visit_dict['time_months'] = float(visit_row['months_since_baseline']) if pd.notna(visit_row['months_since_baseline']) else 0.0
+                visit_dict['delta_months'] = float(visit_row['delta_months']) if pd.notna(visit_row['delta_months']) else 0.0
+                visit_dict['visit_order'] = int(visit_row['visit_order'])
+                
+                # UPDRS totals (targets)
+                updrs_visit = updrs_df[(updrs_df['PATNO'] == patno) & (updrs_df['EVENT_ID'] == event_id)]
+                updrs_values = []
+                for total in updrs_total_cols:
+                    if len(updrs_visit) > 0 and total in updrs_visit.columns:
+                        val = updrs_visit[total].iloc[0]
+                        val = float(val) if pd.notna(val) else np.nan
+                    else:
+                        val = np.nan
+                    updrs_values.append(val)
+                visit_dict['updrs_totals'] = np.array(updrs_values, dtype=np.float32)
+                visit_dict['np3tot'] = updrs_values[2] if len(updrs_values) > 2 else np.nan  # Backward compatibility
+                
+                visits.append(visit_dict)
+            
+            longitudinal_data[patno] = visits
+        
+        print(f"  ✓ Longitudinal data: {sum(len(v) for v in longitudinal_data.values())} visits")
+        print(f"    Motor features: {len(motor_cols)}")
+        print(f"    UPDRS supplementary features: {len(updrs_supplementary_cols)}")
+        print(f"    Clinical features: {len(clinical_cols)}")
+        print(f"    Medication features: {len(med_cols)}")
+        
+        # Compute slopes
+        print("\n--- Computing Progression Slopes ---")
+        if not updrs_df.empty:
+            slopes_df = self.compute_progression_slopes(updrs_df)
+        else:
+            slopes_df = pd.DataFrame()
+        
+        # Create slopes dict
+        slopes = {}
+        for patno in valid_patnos:
+            slopes[patno] = {
+                f'{total}_slope': -999.0 
+                for total in self.config.features.all_updrs_totals
+            }
+        
+        if not slopes_df.empty:
+            for _, row in slopes_df.iterrows():
+                patno = row['PATNO']
+                if patno not in slopes:
+                    continue
+                for total in self.config.features.all_updrs_totals:
+                    slope_col = f'{total}_slope'
+                    if slope_col in row and pd.notna(row[slope_col]):
+                        slopes[patno][slope_col] = float(row[slope_col])
+        
+        print("\n" + "=" * 80)
+        print("FEATURE VECTORS CREATED SUCCESSFULLY")
+        print("=" * 80)
+        print(f"  Patients: {len(valid_patnos)}")
+        print(f"  Total visits: {len(visit_index)}")
+        print(f"  Visits per patient: {len(visit_index) / len(valid_patnos):.1f} average")
+        
+        return {
+            'visit_index': visit_index,
+            'static_data': static_data,
+            'longitudinal_data': longitudinal_data,
+            'slopes': slopes
+        }

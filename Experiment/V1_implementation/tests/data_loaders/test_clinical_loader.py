@@ -5,6 +5,8 @@ Tests for ClinicalAssessmentsLoader
 import pytest
 import pandas as pd
 
+from tests.utils.summary import get_df_summary
+
 
 class TestClinicalAssessmentsLoader:
     """Test ClinicalAssessmentsLoader"""
@@ -26,7 +28,7 @@ class TestClinicalAssessmentsLoader:
         loader.validate(clinical_df)
         
         # Get summary
-        summary = loader.get_summary(clinical_df)
+        summary = get_df_summary(clinical_df)
         unique_patients = clinical_df['PATNO'].nunique()
         
         # Summary assertions
@@ -60,7 +62,7 @@ class TestClinicalAssessmentsLoaderIntegration:
         loader.validate(clinical_df)
         
         # Get summary
-        summary = loader.get_summary(clinical_df)
+        summary = get_df_summary(clinical_df)
         unique_patients = clinical_df['PATNO'].nunique()
         
         # Summary assertions

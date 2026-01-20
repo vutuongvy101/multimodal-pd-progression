@@ -9,3 +9,4 @@ Experiment/V1_implementation/data/data/
 __pycache__/
 *.pyc
 .DS_Store
+Experiment/V1_implementation/tests/test_outputs/

@@ -146,27 +146,96 @@ class SinusoidalTimeEncoding(nn.Module):
 
 class VisitTokenBuilder(nn.Module):
     """
-    Builds visit tokens by combining embeddings from all modalities
+    Builds visit tokens by combining embeddings from enabled modalities.
+    
+    Supports dynamic modality selection - only enabled modalities are concatenated
+    and projected to form visit tokens.
     """
     
-    def __init__(self, d_model: int, dropout: float = 0.1):
+    def __init__(self, d_model: int, enabled_modalities: List[str], dropout: float = 0.1):
         """
         Args:
             d_model: Embedding dimension
+            enabled_modalities: List of enabled modality names 
+                               (e.g., ['static', 'motor', 'nonmotor', 'medication'])
             dropout: Dropout rate
         """
         super().__init__()
         
         self.d_model = d_model
+        self.enabled_modalities = enabled_modalities
+        
+        # Number of modalities determines projection input size
+        n_modalities = len(enabled_modalities)
+        
+        if n_modalities == 0:
+            raise ValueError("At least one modality must be enabled")
         
         # Projection layer to combine modalities
-        # Input: concatenated embeddings from static + motor + nonmotor + med
+        # Input: concatenated embeddings from enabled modalities
         # Output: d_model
         self.projection = nn.Sequential(
-            nn.Linear(d_model * 4, d_model),
+            nn.Linear(d_model * n_modalities, d_model),
             nn.LayerNorm(d_model),
             nn.GELU(),
             nn.Dropout(dropout)
+        )
+        
+    def forward(
+        self,
+        embeddings: dict,
+        seq_len: int
+    ) -> torch.Tensor:
+        """
+        Args:
+            embeddings: Dict mapping modality name to embedding tensor
+                       - Static: [batch, d_model]
+                       - Time-varying: [batch, seq_len, d_model]
+            seq_len: Sequence length (for expanding static embeddings)
+            
+        Returns:
+            visit_tokens: [batch, seq_len, d_model]
+        """
+        # Get batch size from first embedding
+        first_emb = next(iter(embeddings.values()))
+        batch_size = first_emb.shape[0]
+        
+        components = []
+        for mod in self.enabled_modalities:
+            if mod not in embeddings:
+                raise KeyError(f"Modality '{mod}' enabled but not found in embeddings dict")
+            
+            emb = embeddings[mod]
+            
+            # Expand static (2D) embeddings to sequence length
+            if emb.dim() == 2:  # [B, d] -> [B, T, d]
+                emb = emb.unsqueeze(1).expand(batch_size, seq_len, self.d_model)
+            
+            components.append(emb)
+        
+        # Concatenate all enabled modalities
+        combined = torch.cat(components, dim=-1)  # [B, T, d * n_modalities]
+        
+        # Project to d_model
+        visit_tokens = self.projection(combined)  # [B, T, d]
+        
+        return visit_tokens
+
+
+# Legacy compatibility: old interface for backward compatibility
+class VisitTokenBuilderLegacy(nn.Module):
+    """
+    Legacy VisitTokenBuilder with fixed 4-modality interface.
+    Use VisitTokenBuilder with enabled_modalities for new code.
+    """
+    
+    def __init__(self, d_model: int, dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.builder = VisitTokenBuilder(
+            d_model, 
+            ['static', 'motor', 'nonmotor', 'medication'], 
+            dropout
         )
         
     def forward(
@@ -176,35 +245,20 @@ class VisitTokenBuilder(nn.Module):
         nonmotor_emb: torch.Tensor,
         med_emb: torch.Tensor
     ) -> torch.Tensor:
-        """
-        Args:
-            static_emb: [batch, d_model] - static features (same for all visits)
-            motor_emb: [batch, seq_len, d_model]
-            nonmotor_emb: [batch, seq_len, d_model]
-            med_emb: [batch, seq_len, d_model]
-            
-        Returns:
-            visit_tokens: [batch, seq_len, d_model]
-        """
-        batch_size, seq_len, _ = motor_emb.shape
-        
-        # Expand static embedding to match sequence length
-        static_expanded = static_emb.unsqueeze(1).expand(batch_size, seq_len, self.d_model)
-        
-        # Concatenate all modalities
-        combined = torch.cat([static_expanded, motor_emb, nonmotor_emb, med_emb], dim=-1)
-        # Shape: [batch, seq_len, d_model * 4]
-        
-        # Project to d_model
-        visit_tokens = self.projection(combined)
-        # Shape: [batch, seq_len, d_model]
-        
-        return visit_tokens
+        seq_len = motor_emb.shape[1]
+        embeddings = {
+            'static': static_emb,
+            'motor': motor_emb,
+            'nonmotor': nonmotor_emb,
+            'medication': med_emb
+        }
+        return self.builder(embeddings, seq_len)
 
 
 if __name__ == "__main__":
     # Test embeddings
     print("Testing embedding modules...")
+    print("=" * 60)
     
     batch_size = 4
     seq_len = 10
@@ -235,9 +289,8 @@ if __name__ == "__main__":
     nonmotor_embedding = VisitFeatureEmbedding(n_nonmotor_features, d_model, [128])
     med_embedding = VisitFeatureEmbedding(n_med_features, d_model, [64])
     time_encoding = SinusoidalTimeEncoding(d_model, max_time=120.0)
-    visit_builder = VisitTokenBuilder(d_model)
     
-    # Forward pass
+    # Forward pass through individual embeddings
     print(f"\nInput shapes:")
     print(f"  Motor: {motor_values.shape}, mask: {motor_mask.shape}")
     print(f"  Non-motor: {nonmotor_values.shape}, mask: {nonmotor_mask.shape}")
@@ -258,8 +311,41 @@ if __name__ == "__main__":
     print(f"  Medication: {med_emb.shape}")
     print(f"  Time encoding: {time_emb.shape}")
     
-    visit_tokens = visit_builder(static_emb, motor_emb, nonmotor_emb, med_emb)
-    visit_tokens = visit_tokens + time_emb
+    # Test new VisitTokenBuilder with all modalities
+    print("\n--- Testing VisitTokenBuilder (all modalities) ---")
+    enabled_all = ['static', 'motor', 'nonmotor', 'medication']
+    visit_builder_all = VisitTokenBuilder(d_model, enabled_all)
     
-    print(f"\nVisit tokens shape: {visit_tokens.shape}")
-    print("\n✓ All embedding modules working correctly!")
+    embeddings_dict = {
+        'static': static_emb,
+        'motor': motor_emb,
+        'nonmotor': nonmotor_emb,
+        'medication': med_emb
+    }
+    
+    visit_tokens = visit_builder_all(embeddings_dict, seq_len)
+    visit_tokens = visit_tokens + time_emb
+    print(f"  Visit tokens shape (4 modalities): {visit_tokens.shape}")
+    
+    # Test with subset of modalities (ablation)
+    print("\n--- Testing VisitTokenBuilder (motor + static only) ---")
+    enabled_subset = ['static', 'motor']
+    visit_builder_subset = VisitTokenBuilder(d_model, enabled_subset)
+    
+    embeddings_subset = {
+        'static': static_emb,
+        'motor': motor_emb
+    }
+    
+    visit_tokens_subset = visit_builder_subset(embeddings_subset, seq_len)
+    visit_tokens_subset = visit_tokens_subset + time_emb
+    print(f"  Visit tokens shape (2 modalities): {visit_tokens_subset.shape}")
+    
+    # Test legacy interface
+    print("\n--- Testing Legacy Interface ---")
+    legacy_builder = VisitTokenBuilderLegacy(d_model)
+    visit_tokens_legacy = legacy_builder(static_emb, motor_emb, nonmotor_emb, med_emb)
+    print(f"  Legacy visit tokens shape: {visit_tokens_legacy.shape}")
+    
+    print("\n" + "=" * 60)
+    print("✓ All embedding modules working correctly!")

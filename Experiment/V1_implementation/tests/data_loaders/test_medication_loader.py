@@ -5,6 +5,8 @@ Tests for MedicationLoader
 import pytest
 import pandas as pd
 
+from tests.utils.summary import get_df_summary
+
 
 class TestMedicationLoader:
     """Test MedicationLoader"""
@@ -48,7 +50,7 @@ class TestMedicationLoaderIntegration:
         loader.validate(med_df)
         
         # Get summary
-        summary = loader.get_summary(med_df)
+        summary = get_df_summary(med_df)
         
         # Basic assertions
         assert 'PATNO' in med_df.columns

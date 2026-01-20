@@ -119,7 +119,7 @@ class UPDRSLoader(LongitudinalDataLoader):
                 raise
             return pd.DataFrame()
         
-    def load(self) -> pd.DataFrame:
+    def _load_raw(self) -> pd.DataFrame:
         """
         Load all UPDRS parts and supplementary motor assessments, then merge them
         
@@ -216,15 +216,7 @@ class UPDRSLoader(LongitudinalDataLoader):
         
         if updrs_df is None or len(updrs_df) == 0:
             raise ValueError("Could not load any UPDRS or motor assessment data")
-        
-        # Filter to valid participants
-        print("Filtering to valid participants...")
-        updrs_df = self.filter_by_valid_participants(updrs_df)
-        
-        # Compute time since baseline
-        print("Computing months_since_baseline...")
-        updrs_df = self.compute_time_since_baseline(updrs_df)
-        
+
         print(f"✓ Merged UPDRS + supplementary data: {len(updrs_df)} visits, {len(updrs_df.columns)-3} features")
         
         return updrs_df
@@ -243,7 +235,7 @@ class UPDRSLoader(LongitudinalDataLoader):
             raise ValueError("Missing PATNO or EVENT_ID columns")
         
         # Check for at least one UPDRS total
-        totals = [c for c in df.columns if c in ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']]
+        totals = [c for c in df.columns if c in self.config.features.all_updrs_totals]
         if len(totals) == 0:
             raise ValueError("No UPDRS total scores found")
         

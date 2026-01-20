@@ -47,60 +47,64 @@ class TestPredictionHeads:
     """Test prediction head components"""
     
     def test_next_visit_head_creation(self, test_config):
-        """Test NextVisitHead can be created"""
-        from models.heads import NextVisitHead
+        """Test NextVisitPredictionHead can be created"""
+        from models.heads import NextVisitPredictionHead
         
         d_model = test_config.model.d_model
         n_targets = len(test_config.features.all_updrs_totals)
         
-        head = NextVisitHead(d_model, n_targets)
+        head = NextVisitPredictionHead(d_model, n_targets)
         assert head is not None
     
     def test_next_visit_head_forward(self, test_config):
-        """Test NextVisitHead forward pass"""
-        from models.heads import NextVisitHead
+        """Test NextVisitPredictionHead forward pass"""
+        from models.heads import NextVisitPredictionHead
         
         batch_size = 4
         d_model = test_config.model.d_model
         n_targets = len(test_config.features.all_updrs_totals)
         
-        head = NextVisitHead(d_model, n_targets)
+        head = NextVisitPredictionHead(d_model, n_targets)
         
-        # Create input (hidden state at last position)
-        hidden = torch.randn(batch_size, d_model)
+        # Create input hidden states [batch, seq_len, d_model]
+        seq_len = 5
+        hidden_states = torch.randn(batch_size, seq_len, d_model)
         
-        output = head(hidden)
+        output = head(hidden_states)
         
-        assert output.shape == (batch_size, n_targets)
+        # Output should be [batch, seq_len, n_targets]
+        assert output.shape == (batch_size, seq_len, n_targets)
         assert not torch.isnan(output).any()
     
     def test_slope_head_creation(self, test_config):
-        """Test SlopeHead can be created"""
-        from models.heads import SlopeHead
+        """Test ProgressionSlopeHead can be created"""
+        from models.heads import ProgressionSlopeHead
         
         d_model = test_config.model.d_model
         n_targets = len(test_config.features.all_updrs_totals)
         
-        head = SlopeHead(d_model, n_targets)
+        # ProgressionSlopeHead predicts a single slope per patient
+        head = ProgressionSlopeHead(d_model)
         assert head is not None
     
     def test_slope_head_forward(self, test_config):
-        """Test SlopeHead forward pass"""
-        from models.heads import SlopeHead
+        """Test ProgressionSlopeHead forward pass"""
+        from models.heads import ProgressionSlopeHead
         
         batch_size = 4
         seq_len = 5
         d_model = test_config.model.d_model
-        n_targets = len(test_config.features.all_updrs_totals)
+        # Head predicts a single slope per patient from sequence hidden states
+        head = ProgressionSlopeHead(d_model)
         
-        head = SlopeHead(d_model, n_targets)
+        # Create input hidden states and attention mask
+        hidden_states = torch.randn(batch_size, seq_len, d_model)
+        attention_mask = torch.ones(batch_size, seq_len)
         
-        # Create input (pooled sequence representation)
-        pooled = torch.randn(batch_size, d_model)
+        output = head(hidden_states, attention_mask)
         
-        output = head(pooled)
-        
-        assert output.shape == (batch_size, n_targets)
+        # Output should be [batch]
+        assert output.shape == (batch_size,)
         assert not torch.isnan(output).any()
 
 
@@ -125,37 +129,49 @@ class TestV1Model:
         batch_size = 2
         seq_len = 3
         
+        # Determine feature dimensions from FeatureConfig
+        n_static = len(test_config.features.static_features)
+        n_motor = len(test_config.features.motor_features)
+        n_nonmotor = len(test_config.features.nonmotor_features)
+        n_med = len(test_config.features.medication_features)
+        n_targets = len(test_config.model.predict_totals)
+
         # Create mock input data
-        static_features = torch.randn(batch_size, test_config.model.static_dim)
-        motor_features = torch.randn(batch_size, seq_len, test_config.model.motor_dim)
-        nonmotor_features = torch.randn(batch_size, seq_len, test_config.model.nonmotor_dim)
-        medication_features = torch.randn(batch_size, seq_len, test_config.model.medication_dim)
+        static_values = torch.randn(batch_size, n_static)
+        motor_values = torch.randn(batch_size, seq_len, n_motor)
+        nonmotor_values = torch.randn(batch_size, seq_len, n_nonmotor)
+        med_values = torch.randn(batch_size, seq_len, n_med)
         
-        # Create masks
-        motor_mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
-        nonmotor_mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
-        medication_mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
+        # Create masks (0 = observed, 1 = missing)
+        static_mask = torch.zeros(batch_size, n_static)
+        motor_mask = torch.zeros(batch_size, seq_len, n_motor)
+        nonmotor_mask = torch.zeros(batch_size, seq_len, n_nonmotor)
+        med_mask = torch.zeros(batch_size, seq_len, n_med)
         
-        # Create time encoding
-        time_delta = torch.randn(batch_size, seq_len)
+        # Create time and attention masks
+        time_months = torch.randn(batch_size, seq_len).abs()
+        attention_mask = torch.ones(batch_size, seq_len)
         
         with torch.no_grad():
-            next_visit_pred, slope_pred = model(
-                static_features=static_features,
-                motor_features=motor_features,
-                nonmotor_features=nonmotor_features,
-                medication_features=medication_features,
+            outputs = model(
+                static_values=static_values,
+                static_mask=static_mask,
+                motor_values=motor_values,
                 motor_mask=motor_mask,
+                nonmotor_values=nonmotor_values,
                 nonmotor_mask=nonmotor_mask,
-                medication_mask=medication_mask,
-                time_delta=time_delta
+                med_values=med_values,
+                med_mask=med_mask,
+                time_months=time_months,
+                attention_mask=attention_mask
             )
         
-        n_targets = len(test_config.features.all_updrs_totals)
+        next_visit_pred = outputs['next_visit']
+        slope_pred = outputs['slope']
         
         # Check output shapes
-        assert next_visit_pred.shape == (batch_size, n_targets)
-        assert slope_pred.shape == (batch_size, n_targets)
+        assert next_visit_pred.shape == (batch_size, seq_len, n_targets)
+        assert slope_pred.shape == (batch_size,)
         
         # Check for NaNs
         assert not torch.isnan(next_visit_pred).any()

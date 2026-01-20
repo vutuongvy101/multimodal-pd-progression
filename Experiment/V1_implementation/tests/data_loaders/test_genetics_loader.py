@@ -5,6 +5,8 @@ Tests for GeneticsLoader
 import pytest
 import pandas as pd
 
+from tests.utils.summary import get_df_summary
+
 
 class TestGeneticsLoader:
     """Test GeneticsLoader"""
@@ -26,7 +28,7 @@ class TestGeneticsLoader:
         loader.validate(genetics_df)
         
         # Get summary
-        summary = loader.get_summary(genetics_df)
+        summary = get_df_summary(genetics_df)
         unique_patients = genetics_df['PATNO'].nunique()
         
         # Summary assertions
@@ -58,7 +60,7 @@ class TestGeneticsLoaderIntegration:
         loader.validate(genetics_df)
         
         # Get summary
-        summary = loader.get_summary(genetics_df)
+        summary = get_df_summary(genetics_df)
         unique_patients = genetics_df['PATNO'].nunique()
         
         # Summary assertions

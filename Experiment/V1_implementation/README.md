@@ -76,28 +76,33 @@ V1 is a **strategic simplification** of a more complex architecture. The goal is
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        PATIENT DATA                              │
-├─────────────────┬───────────────────────────────────────────────┤
-│  STATIC         │  TIME-VARYING (per visit)                     │
-│  • Genetics     │  • Part I (non-motor)                         │
-│  • Demographics │  • Part II (motor ADL)                        │
-│                 │  • Part III (motor exam)                      │
-│                 │  • Part IV (complications)                    │
-│                 │  • Other assessments (MoCA, ESS, etc.)        │
-│                 │  • Medication context (LEDD, ON/OFF)          │
-└─────────────────┴───────────────────────────────────────────────┘
-         │                           │
-         ▼                           ▼
+│                     VISIT INDEX (master timeline)               │
+│  PATNO | EVENT_ID | months_since_baseline | visit_order | Δt    │
+│  Defines WHEN visits happen - independent of any modality       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+         ┌────────────────────┼────────────────────┐
+         ▼                    ▼                    ▼
+┌─────────────────┐    ┌─────────────────┐   ┌─────────────────┐
+│  STATIC DATA    │    │  TIME-VARYING   │   │  MEDICATION     │
+│  • Genetics     │    │  (per visit)    │   │  CONTEXT        │
+│  • Demographics │    │  • Part I-IV    │   │  • LEDD         │
+│                 │    │  • MoCA, ESS    │   │  • ON/OFF       │
+└─────────────────┘    └─────────────────┘   └─────────────────┘
+         │                    │                    │
+         ▼                    ▼                    ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                     MODALITY EMBEDDINGS                          │
-│  Each modality: MLP([values, missing_mask]) → embedding          │
+│                     MODALITY EMBEDDINGS (per modality)           │
+│  Each modality: MLP([values, input_missingness_mask]) → embedding  │
+│  Enabled modalities configurable: ['static','motor','nonmotor',  │
+│                                    'medication']                 │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                     VISIT TOKEN FORMATION                        │
-│  v_t = Concat(static_emb, motor_emb, nonmotor_emb, med_emb)     │
-│  v_t = v_t + SinusoidalTimeEncoding(months_since_baseline)       │
+│  v_t = Concat(enabled modality embeddings)                       │
+│  v_t = Project(v_t) + SinusoidalTimeEncoding(months, delta_t)    │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -113,12 +118,57 @@ V1 is a **strategic simplification** of a more complex architecture. The goal is
 │   NEXT-VISIT HEAD       │     │   SLOPE HEAD            │
 │   Input: h_t            │     │   Input: pool(H)        │
 │   Output: UPDRS totals  │     │   Output: slopes        │
-│   (NP1TOT, NP2TOT,      │     │   (NP1TOT, NP2TOT,      │
-│    NP3TOT, NP4TOT)      │     │    NP3TOT, NP4TOT)      │
-│   Loss: MSE             │     │   Loss: MSE             │
+│   Loss: MSE with        │     │   Loss: MSE             │
+│   LABEL AVAILABILITY    │     │                         │
+│   MASK per target       │     │                         │
 └─────────────────────────┘     └─────────────────────────┘
 
 Total Loss = L_next_visit + λ × L_slope  (λ = 0.2)
+```
+
+### Two-Mask System
+
+The model uses **two different types of masks** to handle PPMI-style irregular data:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TWO SEPARATE MASKS                           │
+├─────────────────────────────────────────────────────────────────┤
+│  A) INPUT MISSINGNESS MASKS (per modality)                      │
+│     • "Is feature X observed at visit t?"                       │
+│     • Shape: [batch, seq_len, n_features] per modality          │
+│     • Used by: modality embedding MLPs                          │
+│     • 1 = missing, 0 = present                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  B) LABEL AVAILABILITY MASKS (per target)                       │
+│     • "Does visit t+1 have a valid UPDRS total for this task?"  │
+│     • Shape: [batch, seq_len, n_targets]                        │
+│     • Used by: loss computation only                            │
+│     • 1 = label present, 0 = label missing                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key insight**: You do NOT filter timelines based on missing modalities. You keep all visits and mask out loss contributions where labels are missing.
+
+**Example**:
+- If your task is "predict next-visit motor" but motor at V2 is missing:
+  - The V1→V2 prediction should NOT contribute to motor loss
+  - But that same V1→V2 can still contribute to medication-related predictions
+  - You mask the loss, not the timeline
+
+### Modality Selection (Ablation Studies)
+
+Modalities can be enabled/disabled via config for ablation experiments:
+
+```python
+# Train with all modalities (default)
+config.model.enabled_modalities = ['static', 'motor', 'nonmotor', 'medication']
+
+# Train with only static + motor (ablation)
+config.model.enabled_modalities = ['static', 'motor']
+
+# Train without medication context
+config.model.enabled_modalities = ['static', 'motor', 'nonmotor']
 ```
 
 ---
@@ -275,13 +325,42 @@ V1_implementation/
 
 ### Overview
 
-The data pipeline uses a **modular loader architecture** with standardized participant filtering. All loaders inherit from base classes that ensure consistent data processing across the pipeline.
+The data pipeline uses a **modular loader architecture** with a **master visit index** that defines the timeline independently of any modality. All loaders inherit from base classes that ensure consistent data processing.
 
 **Key Design Principles:**
-- ✅ **Standardized participant filtering**: All loaders use the same valid participant list from `participant_status`
+- ✅ **Visit Index as master timeline**: Timeline defined once, not implicitly by any modality
+- ✅ **Standardized participant filtering**: All loaders use the same valid participant list
 - ✅ **Type-based base classes**: `StaticDataLoader` (patient-level) vs `LongitudinalDataLoader` (visit-level)
-- ✅ **Modular design**: Each loader is independent and can be tested separately
-- ✅ **Consistent merge keys**: Static data uses `PATNO`, longitudinal data uses `[PATNO, EVENT_ID]`
+- ✅ **Explicit modality alignment**: Each modality is aligned TO the visit_index
+- ✅ **Two-mask system**: Input missingness (A) and label availability (B) are separate
+
+### Visit Index (Master Timeline)
+
+The `VisitIndexBuilder` creates the master timeline that all modalities align to:
+
+```python
+from data.visit_index_builder import VisitIndexBuilder
+
+builder = VisitIndexBuilder(config)
+visit_index = builder.build_from_sources(
+    source_dfs=[updrs_df, clinical_df, medication_df],
+    valid_patnos=valid_patient_list
+)
+```
+
+**visit_index columns:**
+| Column | Description |
+|--------|-------------|
+| `PATNO` | Patient ID |
+| `EVENT_ID` | Visit code (BL, V01, V02, R01, U01, etc.) |
+| `visit_date` | Actual date (from INFODT) |
+| `months_since_baseline` | Continuous time since baseline |
+| `visit_order` | Integer (0, 1, 2, ...) within patient |
+| `delta_months` | Time gap from previous visit |
+
+**Key insight**: The visit_index is the UNION of all visit anchors across all sources, then filtered and sorted. This means:
+- If a patient has a medication visit but no UPDRS that day, the visit still exists
+- Missing modality data at a visit = mask it, don't filter the timeline
 
 ### Base Loader Classes
 
@@ -307,7 +386,6 @@ All loaders use `participant_status` as the source of truth for valid participan
 ```python
 # Base class methods available to all loaders:
 self._load_and_filter_participants(config)  # Load and filter participant_status
-self._filter_valid_participants(df)         # Apply filtering logic
 ```
 
 **Filtering criteria**:
@@ -458,23 +536,23 @@ Raw PPMI CSV Files
     ├─→ participant_status.csv
     │       └─→ [STANDARDIZED FILTERING] ──→ Valid PATNOs
     │                                              │
-    ├─→ DemographicsLoader ───────────────────────┘
-    │   └─→ static_df (PATNO + demographics)
-    │
-    ├─→ GeneticsLoader ──────────────────────────┐
-    │   └─→ genetics_df (PATNO + genetics)       │
-    │                                            ├─→ static_df (merged)
-    │                                            │
+    ├─→ DemographicsLoader ────────────────────────┤
+    │   └─→ static_df (PATNO + demographics)       │
+    │                                              │
+    ├─→ GeneticsLoader ────────────────────────────└─→ static_df (merged)
+    │   └─→ genetics_df (PATNO + genetics)       
+    │                                            
+    │                                            
     ├─→ UPDRSLoader ────────────────────────────┐
     │   └─→ updrs_df (PATNO, EVENT_ID, UPDRS)   │
-    │                                            │
+    │                                           │
     ├─→ ClinicalAssessmentsLoader ──────────────┤
     │   └─→ clinical_df (PATNO, EVENT_ID, ...)  │
-    │                                            │
-    ├─→ MedicationLoader ────────────────────────┤
+    │                                           │
+    ├─→ MedicationLoader ───────────────────────┤
     │   └─→ medication_df (PATNO, EVENT_ID, ...)├─→ longitudinal_df (merged)
-    │                                            │
-    └─→ AgeAtVisitLoader ─────────────────────────┘
+    │                                           │
+    └─→ AgeAtVisitLoader ───────────────────────┘
         └─→ age_at_visit_df (PATNO, EVENT_ID, AGE_AT_VISIT)
                         │
                         ▼

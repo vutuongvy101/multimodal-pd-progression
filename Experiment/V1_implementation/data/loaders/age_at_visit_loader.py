@@ -5,10 +5,13 @@ Load age at visit data (longitudinal - varies by visit)
 
 import pandas as pd
 import numpy as np
+import logging
 from typing import List
 
 from ..base_loader import LongitudinalDataLoader
 from training.config import DataConfig
+
+_LOG = logging.getLogger(__name__)
 
 
 class AgeAtVisitLoader(LongitudinalDataLoader):
@@ -27,6 +30,71 @@ class AgeAtVisitLoader(LongitudinalDataLoader):
         super().__init__(base_dir, config, valid_participants=valid_participants)
         # config is now stored in base class as self.config - no need to store again
         
+    def __load_data_file__(self, file_path_config: str, feature_list: List[str], file_name: str, required: bool = False) -> pd.DataFrame:
+        """Generic loader for age/visit CSV files.
+
+        Returns an empty DataFrame with standard columns on non-fatal errors.
+        If `required=True`, errors are raised to fail-fast.
+        """
+        try:
+            file_path = getattr(self.config.data, file_path_config, None)
+            if file_path is None:
+                msg = f"{file_name} config not found: {file_path_config}"
+                _LOG.error(msg)
+                if required:
+                    raise FileNotFoundError(msg)
+                return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
+
+            resolved = self.resolve_path(file_path)
+            import os
+            if not os.path.exists(resolved):
+                msg = f"{file_name} file not found: {resolved}"
+                _LOG.error(msg)
+                if required:
+                    raise FileNotFoundError(msg)
+                return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
+
+            _LOG.info(f"Loading {file_name} from: {resolved}")
+            df = pd.read_csv(resolved, low_memory=False)
+
+            # Basic validation
+            if 'PATNO' not in df.columns:
+                msg = f"Required column 'PATNO' missing in {file_name}: {resolved}"
+                _LOG.error(msg)
+                if required:
+                    raise ValueError(msg)
+                return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
+
+            required_cols = ['PATNO', 'EVENT_ID']
+            available = [c for c in feature_list if c in df.columns]
+            cols = [c for c in required_cols if c in df.columns] + available
+
+            out_df = df[cols].copy()
+
+            # If INFODT present we could compute months_since_baseline here; otherwise initialize as None
+            if 'INFODT' in out_df.columns:
+                try:
+                    out_df = self.compute_time_since_baseline(out_df)
+                except Exception:
+                    _LOG.exception("Error computing months_since_baseline for age_at_visit; leaving as None")
+                    out_df['months_since_baseline'] = None
+            else:
+                out_df['months_since_baseline'] = None
+
+            _LOG.info(f"{file_name}: {len(out_df)} records")
+            return out_df
+
+        except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as e:
+            _LOG.exception(f"Could not load {file_name}: {e}")
+            if required:
+                raise
+            return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
+        except Exception:
+            _LOG.exception(f"Unexpected error loading {file_name}")
+            if required:
+                raise
+            return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
+        
     def load(self) -> pd.DataFrame:
         """
         Load age at visit data
@@ -34,44 +102,13 @@ class AgeAtVisitLoader(LongitudinalDataLoader):
         Returns:
             DataFrame with PATNO, EVENT_ID, months_since_baseline, and AGE_AT_VISIT
         """
-        try:
-            file_path = self.resolve_path(self.config.data.age_at_visit)
-            print(f"Loading age_at_visit from: {file_path}")
-            
-            import os
-            if not os.path.exists(file_path):
-                print(f"  ⚠️  Warning: age_at_visit file not found: {file_path}")
-                return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
-            
-            age_df = pd.read_csv(file_path)
-            
-            if 'PATNO' not in age_df.columns:
-                print(f"  ⚠️  Warning: PATNO not found in age_at_visit, skipping")
-                return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
-            
-            # Select only PATNO, EVENT_ID, and AGE_AT_VISIT columns
-            age_cols_to_keep = ['PATNO', 'EVENT_ID', 'AGE_AT_VISIT']
-            age_cols_available = [col for col in age_cols_to_keep if col in age_df.columns]
-            
-            if 'AGE_AT_VISIT' not in age_cols_available:
-                print(f"  ⚠️  Warning: AGE_AT_VISIT column not found, skipping")
-                return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
-            
-            age_df = age_df[age_cols_available].copy()
-            
-            # Note: age_at_visit file doesn't contain INFODT, so we cannot compute 
-            # months_since_baseline here. It will be filled during merging with other 
-            # longitudinal data (e.g., UPDRS) that contains INFODT.
-            # Initialize months_since_baseline as None - it will be filled during merge
-            age_df['months_since_baseline'] = None
-            
-            print(f"  ✓ Loaded age_at_visit: {len(age_df)} visit records")
-            
-            return age_df
-            
-        except Exception as e:
-            print(f"  ⚠️  Could not load age_at_visit: {e}")
+        # Use generic loader (age_at_visit is optional)
+        age_df = self.__load_data_file__('age_at_visit', self.config.features.age_at_visit_features, 'Age at Visit', required=False)
+        if age_df is None or len(age_df) == 0:
+            _LOG.warning("No age_at_visit data loaded; returning empty DataFrame")
             return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline', 'AGE_AT_VISIT'])
+        _LOG.info(f"✓ Loaded age_at_visit: {len(age_df)} records")
+        return age_df
     
     def get_required_columns(self) -> List[str]:
         """Required columns in output"""

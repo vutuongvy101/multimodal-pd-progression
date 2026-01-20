@@ -29,6 +29,62 @@ class GeneticsLoader(StaticDataLoader):
         """
         super().__init__(base_dir, config, valid_participants=valid_participants)
         # config is now stored in base class as self.config - no need to store again
+    
+    def __load_and_merge_data__(self, df: pd.DataFrame, file_path: str,
+                            merge_columns: List[str], 
+                            how: str = 'left') -> pd.DataFrame:
+        """
+        Generic method to load and merge a CSV file with the main dataframe
+        
+        Args:
+            df: Main dataframe to merge into
+            file_path: Path to the CSV file to load
+            merge_columns: Columns to select from the CSV before merging (includes 'PATNO')
+            how: Type of merge ('left', 'inner', 'outer')
+            
+        Returns:
+            Merged dataframe
+        """
+        import os
+        
+        def resolve_path(file_path):
+            if os.path.isabs(file_path):
+                return file_path
+            if file_path.startswith('../'):
+                return os.path.normpath(os.path.abspath(file_path))
+            return os.path.normpath(os.path.join(self.base_dir, file_path))
+        
+        file_path = resolve_path(file_path)
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}\n"
+                                  f"  Checked: {os.path.abspath(file_path)}\n"
+                                  f"  Base dir: {os.path.abspath(self.base_dir)}")
+        
+        print(f"  Loading: {file_path}")
+        additional_df = pd.read_csv(file_path)
+        
+        # Ensure PATNO exists
+        if 'PATNO' not in additional_df.columns:
+            raise ValueError(f"PATNO not found in {file_path}")
+        
+        # Select only merge_columns that exist in the file (filter out PATNO from feature list)
+        feature_cols = [col for col in merge_columns if col in additional_df.columns and col != 'PATNO']
+        additional_df = additional_df[['PATNO'] + feature_cols].copy()
+        
+        # Handle multiple rows per patient - take first occurrence
+        additional_df = additional_df.groupby('PATNO')[feature_cols].first().reset_index()
+        
+        # Merge
+        df = df.merge(
+            additional_df,
+            on='PATNO',
+            how=how,
+            suffixes=('', f'_{file_path}')
+        )
+        
+        print(f"  ✓ Merged {file_path}: {additional_df.shape[0]} records")
+        return df
         
     def load(self) -> pd.DataFrame:
         """
@@ -37,48 +93,41 @@ class GeneticsLoader(StaticDataLoader):
         Returns:
             DataFrame with PATNO + all genetics features
         """
-        participant_df = self._load_and_filter_participants(
+        # Load and filter participant status first
+        df = self._load_and_filter_participants(
             include_columns=['COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS', 'ENROLL_AGE']
         )
 
-        # Load genetic consensus
-        consensus_path = self.resolve_path(self.config.data.genetic_consensus)
-        print(f"Loading genetic consensus from: {consensus_path}")
-        if not os.path.exists(consensus_path):
-            raise FileNotFoundError(f"Genetic consensus file not found: {consensus_path}\n"
-                                  f"  Checked: {os.path.abspath(consensus_path)}\n"
-                                  f"  Base dir: {os.path.abspath(self.base_dir)}")
-        consensus_df = pd.read_csv(consensus_path)
-        consensus_df = consensus_df[['PATNO'] + self.config.features.monogenic_variants_features]
+        # Merge genetic consensus
+        consensus_cols = ['PATNO'] + self.config.features.monogenic_variants_features
+        df = self.__load_and_merge_data__(
+            df,
+            self.config.data.genetic_consensus,
+            merge_columns=consensus_cols,
+            how='left'
+        )
         
-        # Load PRS scores
-        prs_path = self.resolve_path(self.config.data.prs_scores)
-        print(f"Loading PRS scores from: {prs_path}")
-        if not os.path.exists(prs_path):
-            raise FileNotFoundError(f"PRS scores file not found: {prs_path}\n"
-                                  f"  Checked: {os.path.abspath(prs_path)}\n"
-                                  f"  Base dir: {os.path.abspath(self.base_dir)}")
-        prs_df = pd.read_csv(prs_path)
-        prs_df = prs_df[['PATNO'] + self.config.features.polygenic_features]
+        # Merge PRS scores
+        prs_cols = ['PATNO'] + self.config.features.polygenic_features
+        df = self.__load_and_merge_data__(
+            df,
+            self.config.data.prs_scores,
+            merge_columns=prs_cols,
+            how='left'
+        )
         
-        # Load principal components
-        pcs_path = self.resolve_path(self.config.data.prs_pcs)
-        print(f"Loading PCs from: {pcs_path}")
-        if not os.path.exists(pcs_path):
-            raise FileNotFoundError(f"Principal components file not found: {pcs_path}\n"
-                                  f"  Checked: {os.path.abspath(pcs_path)}\n"
-                                  f"  Base dir: {os.path.abspath(self.base_dir)}")
-        pcs_df = pd.read_csv(pcs_path)
-        pcs_df = pcs_df[['PATNO'] + self.config.features.genetic_principal_components_features]
+        # Merge principal components
+        pcs_cols = ['PATNO'] + self.config.features.genetic_principal_components_features
+        df = self.__load_and_merge_data__(
+            df,
+            self.config.data.prs_pcs,
+            merge_columns=pcs_cols,
+            how='left'
+        )
         
-        # Merge all genetics data
-        consensus_df = participant_df.merge(consensus_df, how='left', on='PATNO')
-        genetics_df = consensus_df.merge(prs_df, on='PATNO', how='left')
-        genetics_df = genetics_df.merge(pcs_df, on='PATNO', how='left')
+        print(f"✓ Loaded genetics data: {len(df)} patients, {len(df.columns)-1} features")
         
-        print(f"✓ Loaded genetics data: {len(genetics_df)} patients, {len(genetics_df.columns)-1} features")
-        
-        return genetics_df
+        return df
 
     def get_required_columns(self) -> List[str]:
         """Required columns in output"""

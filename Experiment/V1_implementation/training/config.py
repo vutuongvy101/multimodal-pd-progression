@@ -35,18 +35,29 @@ class FeatureConfig:
                 self.genetic_principal_components_features
         )
 
-    demographics_features: List[str] = field(default_factory=lambda: [
-        # Education years
-        'EDUCYRS',
-        # Demographics
+    # Age at visit
+    age_at_visit_features: List[str] = field(default_factory=lambda: [
+        'AGE_AT_VISIT'
+    ])
+
+    # Demographics - Socioeconomic Status
+    socioeconomic_features: List[str] = field(default_factory=lambda: [
+        'EDUCYRS'  # Education years
+    ])
+
+    # Demographics - Basic Demographics
+    basic_demographics_features: List[str] = field(default_factory=lambda: [
         'SEX', 'HANDED',
         # Descent
         'AFICBERB', 'ASHKJEW', 'BASQUE',
         # Sexuality
         'HOWLIVE', 'GAYLES', 'HETERO', 'BISEXUAL', 'PANSEXUAL', 'ASEXUAL', 'OTHSEXUALITY',
         # Ethnicity/Race
-        'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN',
-        # Family history
+        'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN'
+    ])
+
+    # Demographics - Family History
+    family_history_features: List[str] = field(default_factory=lambda: [
         'ANYFAMPD',
         # 1st degree family
         'BIOMOM', 'BIOMOMPD', 'BIODAD', 'BIODADPD',
@@ -62,46 +73,93 @@ class FeatureConfig:
     ])
 
     @property
+    def demographics_features(self) -> List[str]:
+        """Combined demographics features (socioeconomic + basic + family history)"""
+        return (
+            self.socioeconomic_features +
+            self.basic_demographics_features +
+            self.family_history_features
+        )
+
+    @property
     def static_features(self) -> List[str]:
         """Combined static features (genetics + demographics)"""
         return self.genetics_features + self.demographics_features
 
-    part1_questionnaire_features: List[str] = field(default_factory=lambda: [
-        'NP1SLPN', 'NP1SLPD', 'NP1URIN', 'NP1CNST', 'NP1LTHD', 'NP1PAIN', 'NP1FATG'
+    # UPDRS features
+    # Part I - Non-motor experiences of daily living
+    part1_updrs_features: List[str] = field(default_factory=lambda: [
+        'NP1DPRS', 'NP1ANXS', 'NP1APAT',  # Mood and Apathy
+        'NP1COG', 'NP1HALL', 'NP1DDS', # Cognitive & Psychosis
+        'NP1RTOT'  # Part I total
     ])
 
-    part1_uprs_features: List[str] = field(default_factory=lambda: [
-        'NP1DPRS', 'NP1ANXS', 'NP1APAT', 'NP1COG', 'NP1HALL', 'NP1DDS',
-        'NP1RTOT'  # Part I total
+    part1_questionnaire_features: List[str] = field(default_factory=lambda: [
+        'NP1SLPN', 'NP1SLPD', # Sleep
+        'NP1URIN', 'NP1CNST', 'NP1LTHD', # Autonomic
+        'NP1PAIN', 'NP1FATG' # Sensory Fatigue
     ])
 
     @property
     def part1_features(self) -> List[str]:
         """Part I - Non-motor experiences of daily living (combined questionnaire + UPDRS)"""
-        return self.part1_questionnaire_features + self.part1_uprs_features
+        return  self.part1_updrs_features + self.part1_questionnaire_features
 
     # Part II - Motor experiences of daily living (patient-reported)
     part2_features: List[str] = field(default_factory=lambda: [
-        'NP2SPCH', 'NP2SALV', 'NP2SWAL', 'NP2EAT', 'NP2DRES', 'NP2HYGN',
-        'NP2HWRT', 'NP2HOBB', 'NP2TURN', 'NP2RISE', 'NP2WALK', 'NP2FREZ', 'NP2TRMR',
+        'NP2SPCH', 'NP2SALV', 'NP2SWAL', # Bulbar
+        'NP2EAT', 'NP2DRES', 'NP2HYGN', 'NP2HWRT', 'NP2HOBB', # Fine Motor
+        'NP2TURN', 'NP2RISE', 'NP2WALK', 'NP2FREZ', # Mobility
+        'NP2TRMR', # Tremor
         'NP2PTOT'  # Part II total
     ])
 
     # Part III - Motor examination (clinician-observed)
     part3_features: List[str] = field(default_factory=lambda: [
-        'NP3SPCH', 'NP3FACXP', 'NP3RIGN', 'NP3RIGRU', 'NP3RIGLU', 'NP3RIGRL', 'NP3RIGLL',
+        #  Bulbar
+        'NP3SPCH', 'NP3FACXP',
+        # Rigidity
+        'NP3RIGN', 'NP3RIGRU', 'NP3RIGLU', 'NP3RIGRL', 'NP3RIGLL',
+        # Bradykinesia
         'NP3FTAPR', 'NP3FTAPL', 'NP3HMOVR', 'NP3HMOVL', 'NP3PRSPR', 'NP3PRSPL',
-        'NP3TTAPR', 'NP3TTAPL', 'NP3LGAGR', 'NP3LGAGL', 'NP3RISNG', 'NP3GAIT',
-        'NP3FRZGT', 'NP3PSTBL', 'NP3POSTR', 'NP3BRADY', 'NP3PTRMR', 'NP3PTRML',
-        'NP3KTRMR', 'NP3KTRML', 'NP3RTARU', 'NP3RTALU', 'NP3RTARL', 'NP3RTALL',
-        'NP3RTALJ', 'NP3RTCON',
+        'NP3TTAPR', 'NP3TTAPL', 'NP3LGAGR', 'NP3LGAGL',
+        # PIGD
+        'NP3RISNG', 'NP3GAIT', 'NP3BRADY',
+        'NP3FRZGT', 'NP3PSTBL', 'NP3POSTR',
+        'NP3PTRMR', 'NP3PTRML',
+        # Tremor
+        'NP3KTRMR', 'NP3KTRML', 'NP3RTARU', 'NP3RTALU', 'NP3RTARL',
+        'NP3RTALL','NP3RTALJ', 'NP3RTCON',
         'NP3TOT'  # Part III total
     ])
 
     # Part IV - Motor complications
     part4_features: List[str] = field(default_factory=lambda: [
-        'NP4WDYSK', 'NP4DYSKI', 'NP4OFF', 'NP4FLCTI', 'NP4FLCTX', 'NP4DYSTN',
+        # Fluctuations
+        'NP4WDYSK', 'NP4DYSKI',
+        # Dyskinesias
+        'NP4OFF', 'NP4FLCTI', 'NP4FLCTX',
+        # Dystonia
+        'NP4DYSTN',
         'NP4TOT'  # Part IV total
+    ])
+
+    # Additional motor assessment features (supplementary to UPDRS)
+    schwab_england_features: List[str] = field(default_factory=lambda: [
+        'MSEADLG'  # Modified Schwab & England ADL scale
+    ])
+
+    neuro_qol_lower_features: List[str] = field(default_factory=lambda: [
+        'NQMOB37', 'NQMOB30', 'NQMOB26', 'NQMOB32', 'NQMOB25', 'NQMOB33', 'NQMOB31', 'NQMOB28'
+    ])
+
+    neuro_qol_upper_features: List[str] = field(default_factory=lambda: [
+        'NQUEX29', 'NQUEX20', 'NQUEX44', 'NQUEX36', 'NQUEX30', 'NQUEX28', 'NQUEX33', 'NQUEX37'
+    ])
+
+    participant_motor_features: List[str] = field(default_factory=lambda: [
+        'TRBUPCHR', 'WRTSMLR', 'VOICSFTR', 'POORBAL', 'FTSTUCK', 'LSSXPRSS', 'ARMLGSHK',
+        'TRBBUTTN', 'SHUFFLE', 'MVSLOW', 'TOLDPD'
     ])
 
     # Convenience groupings for backward compatibility
@@ -112,18 +170,27 @@ class FeatureConfig:
         Part II: Motor experiences of daily living (patient-reported)
         Part III: Motor examination (clinician-observed)
         Part IV: Motor complications (dyskinesia, OFF time, fluctuations, dystonia)
+        Part I: Non-motor experiences of daily living (for completeness)
+        Schwab & England, Neuro QoL, Participant Motor Function are supplementary motor assessments
         """
-        return self.part2_features + self.part3_features + self.part4_features
-
+        return (self.part2_features + self.part3_features + self.part4_features + self.part1_features)
+    
+    # UPDRS loader supplementary features (used for comprehensive motor assessment)
     @property
-    def nonmotor_features(self) -> List[str]:
-        """Combined non-motor features (Part I + other assessments)"""
-        return self.part1_features + self.other_nonmotor_features
+    def updrs_supplementary_features(self) -> List[str]:
+        """All supplementary features loaded by UPDRS loader (beyond core UPDRS parts)"""
+        return (
+            self.schwab_england_features +
+            self.neuro_qol_lower_features +
+            self.neuro_qol_upper_features +
+            self.participant_motor_features
+        )
 
     @property
     def all_updrs_totals(self) -> List[str]:
         """All UPDRS total scores"""
         return ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']
+
 
     # Clinical assessment source column names
     # Cognitive
@@ -137,27 +204,30 @@ class FeatureConfig:
         'SCAU11', 'SCAU12', 'SCAU13', 'SCAU14', 'SCAU15', 'SCAU16', 'SCAU17', 'SCAU18', 'SCAU19', 'SCAU20',
         'SCAU21', 'SCAU22', 'SCAU23', 'SCAU24', 'SCAU25'])
 
-    schwab_features: List[str] = field(default_factory=lambda: ['MSEADLG'])
-
     @property
-    def other_nonmotor_features(self) -> List[str]:
+    def clinical_features(self) -> List[str]:
         """Additional non-motor assessments (normalized output column names)"""
-        return self.moca_features + self.ess_features + self.scopa_aut_features + self.schwab_features
+        return self.moca_features + self.ess_features + self.scopa_aut_features
+
 
     # Medication source column names
     # Levodopa equivalent daily dose
     ledd_features: List[str] = field(
-        default_factory=lambda: ['LEDD', 'LED', 'LEDD_TOTAL', 'LEDDTOT'])  # LEDD preferred, then variants
-    # ON=1, OFF=0
-    pdmedyn_features: List[str] = field(
-        default_factory=lambda: ['PDMEDYN', 'ON_OFF', 'PD_MED_USE'])  # PDMEDYN preferred, then alternatives
+        default_factory=lambda: ['LEDTRT', 'STARTDT', 'STOPDT', 'LEDD'])
+    
+    # Vital signs
+    vital_signs_features: List[str] = field(
+        default_factory=lambda: ['SYSSUP', 'DIASUP', 'SYSSTND', 'DIASTND', 'HRSUP', 'HRSTND', 'WGTKG', 'HTCM'])  
 
-    # Medication context (normalized output column names)
-    medication_features: List[str] = field(default_factory=lambda: [
-        'PDMEDYN',
-        'LEDD',
-        'HOURS_SINCE_DOSE',  # If available
+    # PD diagnosis history
+    pd_diagnosis_features: List[str] = field(default_factory=lambda: [
+        'PDDXDT', 'SXDT', 'DXTREMOR', 'DXRIGID', 'DXBRADY', 'DOMSIDE'
     ])
+
+    @property
+    def medication_features(self) -> List[str]:
+        """Combined medication features (LEDD + vital signs + PD diagnosis)"""
+        return self.ledd_features + self.vital_signs_features + self.pd_diagnosis_features
 
 
 def calculate_mlp_dims(n_features: int, d_model: int = 256,
@@ -365,8 +435,10 @@ class DataConfig:
     _repo_root = Path(__file__).parent.parent.parent.parent
     base_dir: str = str(_repo_root / "ppmi_pd")
 
-    # Input files
+    # Participant Status (master_df)
     participant_status: str = "Participant_Status_14Dec2025.csv"
+
+    # Demographics files
     demographics: str = "Subject_Demographics/Demographics_14Dec2025.csv"
     family_history: str = "Family_History_14Dec2025.csv"
     socio_economic: str = "Subject_Demographics/Socio-Economics_14Dec2025.csv"
@@ -377,18 +449,22 @@ class DataConfig:
     prs_scores: str = "Genetic_Status/Polygenic_Risk_Scores_14Dec2025.csv"
     prs_pcs: str = "Genetic_Status/PPMI_Project_9001_20250624_14Dec2025.csv"
 
-    # Clinical files (to be added based on your data structure)
+    # Motor clinical files (to be added based on your data structure)
     updrs_part1_ques: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_I_Patient_Questionnaire_14Dec2025.csv"
     updrs_part1: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_I_14Dec2025.csv"
     updrs_part2: str = "Motor___MDS-UPDRS/MDS_UPDRS_Part_II__Patient_Questionnaire_14Dec2025.csv"
     updrs_part3: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_III_14Dec2025.csv"
     updrs_part4: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_IV__Motor_Complications_14Dec2025.csv"
+    schwab_england: str = "Motor___MDS-UPDRS/Modified_Schwab___England_Activities_of_Daily_Living_14Dec2025.csv"
+    neuro_qol_lower: str = "Motor___MDS-UPDRS/Neuro_QoL__Lower_Extremity_Function__Mobility__-_Short_Form_14Dec2025.csv"
+    neuro_qol_upper: str = "Motor___MDS-UPDRS/Neuro_QoL__Upper_Extremity_Function_-_Short_Form_14Dec2025.csv"
+    participant_motor: str = "Motor___MDS-UPDRS/Participant_Motor_Function_Questionnaire_14Dec2025.csv"
 
-    # Non-motor clinical assessments
+    # Non-motor clinical files
     moca: str = "Non-motor_Assessments/Montreal_Cognitive_Assessment__MoCA__14Dec2025.csv"
     ess: str = "Non-motor_Assessments/Epworth_Sleepiness_Scale_14Dec2025.csv"
     scopa_aut: str = "Non-motor_Assessments/SCOPA-AUT_14Dec2025.csv"
-    schwab_england: str = "Motor___MDS-UPDRS/Modified_Schwab___England_Activities_of_Daily_Living_14Dec2025.csv"
+    # schwab_england: str = "Motor___MDS-UPDRS/Modified_Schwab___England_Activities_of_Daily_Living_14Dec2025.csv"
 
     # Output paths (relative to V1_implementation directory)
     processed_data_dir: str = "data/processed"
@@ -403,13 +479,23 @@ class Config:
     model: ModelConfig
     training: TrainingConfig
     data: DataConfig
+    # When True, loaders and utilities should raise on missing/critical errors
+    # (useful during development / CI). When False, loaders may return empty
+    # DataFrames for optional files and log errors instead of raising.
+    raise_on_error: bool = True
 
     def __post_init__(self):
         """Validate configuration after initialization and set up internal references"""
         # Set feature_config reference in model_config so it can access features without passing config around
         self.model._feature_config = self.features
         # Ensure MLP dimensions are compatible
-        pass
+        # Make flag visible via model/training if needed in runtime
+        try:
+            # Attach flag to training for backward compatibility checks
+            setattr(self.training, 'raise_on_error', self.raise_on_error)
+        except Exception:
+            # Non-fatal: only a convenience mapping
+            pass
 
 
 # Create default configs

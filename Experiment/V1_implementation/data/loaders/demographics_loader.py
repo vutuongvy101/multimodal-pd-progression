@@ -104,28 +104,18 @@ class DemographicsLoader(StaticDataLoader):
         
     def load(self) -> pd.DataFrame:
         """
-        Load demographics data
+        Load demographics data from multiple sources
         
         Returns:
             DataFrame with PATNO + demographics features
         """
-        def resolve_path(file_path):
-            """Resolve file path, handling relative paths that start with ../"""
-            if os.path.isabs(file_path):
-                return file_path
-            if file_path.startswith('../'):
-                return os.path.normpath(os.path.abspath(file_path))
-            return os.path.normpath(os.path.join(self.base_dir, file_path))
-        
-        # Load and filter participant status (using standardized method from base class)
-        # Include columns that we need from participant_status
-        # Uses self.config from base class - no need to pass config
+        # Load and filter participant status first
         df = self._load_and_filter_participants(
             include_columns=['COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS', 'ENROLL_AGE']
         )
 
         # Merge Socioeconomic Status
-        socio_cols = ['PATNO', 'EDUCYRS']
+        socio_cols = ['PATNO'] + self.config.features.socioeconomic_features
         df = self.__load_and_merge_data__(
             df, 
             self.config.data.socio_economic,
@@ -133,14 +123,8 @@ class DemographicsLoader(StaticDataLoader):
             how='left'
         )
 
-        # Merge Demographics file (if has additional columns not in participant_status)
-        demo_cols = [   'PATNO', 'SEX', 'HANDED', 
-                        # Descent    
-                        'AFICBERB', 'ASHKJEW', 'BASQUE', 
-                        # Sexuality
-                        'HOWLIVE', 'GAYLES', 'HETERO', 'BISEXUAL', 'PANSEXUAL', 'ASEXUAL', 'OTHSEXUALITY', 
-                        # Ethnicity/Race
-                        'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN' ]  
+        # Merge Basic Demographics (sex, ethnicity, sexuality, descent)
+        demo_cols = ['PATNO'] + self.config.features.basic_demographics_features
         df = self.__load_and_merge_data__(
             df, 
             self.config.data.demographics,
@@ -149,18 +133,7 @@ class DemographicsLoader(StaticDataLoader):
         )
         
         # Merge Family History
-        family_cols = [ 'PATNO', 'ANYFAMPD', 
-                        # 1st degree family
-                        'BIOMOM', 'BIOMOMPD', 'BIODAD', 'BIODADPD',
-                        'FULSIB', 'FULBRO', 'FULSIS', 'FULSIBPD', 'FULBROPD', 'FULSISPD', 
-                        'KIDSPD',
-                        # 2nd degree family
-                        'HAFSIB', 'PAHAFSIB', 'MAHAFSIB', 'HAFSIBPD', 'MAHAFSIBPD',
-                        'PAHAFSIBPD', 'MAGPAR', 'MAGPARPD', 'MAGFATHPD', 'MAGMOTHPD', 'PAGPAR',
-                        'PAGPARPD', 'PAGFATHPD', 'PAGMOTHPD', 'MATAU', 'MATAUPD', 'PATAU',
-                        'PATAUPD', 'MATCOUS', 'MATCOUSPD',
-                        'PATCOUS', 'PATCOUSPD',
-                        'DISFAMPD']
+        family_cols = ['PATNO'] + self.config.features.family_history_features
         df = self.__load_and_merge_data__(
             df, 
             self.config.data.family_history,
@@ -168,19 +141,6 @@ class DemographicsLoader(StaticDataLoader):
             how='left'
         )
 
-        # Select relevant columns
-        demo_cols = ['PATNO', 'ENROLL_AGE', 'COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS']
-        
-        # Add optional columns if they exist
-        optional_cols = [col for col in df.columns if col not in ['PATNO', 'COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS']]
-        df = df[['PATNO', 'COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS'] + optional_cols].copy()
-
-        for col in optional_cols:
-            if col in df.columns:
-                demo_cols.append(col)
-        
-        df = df[demo_cols].copy()
-        
         # Check for duplicate column names
         duplicate_cols = df.columns[df.columns.duplicated()].tolist()
         if duplicate_cols:
@@ -197,8 +157,9 @@ class DemographicsLoader(StaticDataLoader):
             # Encode sex (assuming 0=female, 1=male or similar)
             df['SEX'] = pd.to_numeric(df['SEX'], errors='coerce')
         
-        # all attributes in optional_cols are binary (0/1) or numeric, so convert them
-        for col in optional_cols:
+        # Convert all other columns to numeric
+        numeric_cols = [col for col in df.columns if col not in ['PATNO', 'COHORT', 'COHORT_DEFINITION', 'ENROLL_STATUS']]
+        for col in numeric_cols:
             if col in df.columns:
                 try:
                     # Check if column is a Series (not duplicate column names)

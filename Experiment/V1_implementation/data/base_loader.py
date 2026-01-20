@@ -172,7 +172,6 @@ class StaticDataLoader(BaseDataLoader):
 
 
 class LongitudinalDataLoader(BaseDataLoader):
-    """Base class for loaders that provide time-varying (visit-level) data"""
 
     @abstractmethod
     def _load_raw(self) -> pd.DataFrame:
@@ -184,7 +183,6 @@ class LongitudinalDataLoader(BaseDataLoader):
         Standard longitudinal pipeline:
         - load raw
         - filter to valid participants
-        - filter to patients with >= min_visits
         - compute months_since_baseline
         """
         df = self._load_raw()
@@ -194,9 +192,6 @@ class LongitudinalDataLoader(BaseDataLoader):
             return df if df is not None else pd.DataFrame()
 
         df = self.filter_by_valid_participants(df)
-
-        min_visits = getattr(getattr(self.config, "training", None), "min_visits_for_slope", 3)
-        df = self.filter_by_min_visits(df, min_visits=min_visits)
 
         if "INFODT" in df.columns:
             df = self.compute_time_since_baseline(df)
@@ -225,35 +220,6 @@ class LongitudinalDataLoader(BaseDataLoader):
         filtered_df = df[df['PATNO'].isin(valid_patnos)].copy()
         
         print(f"  Filtered to {len(filtered_df)} visits from {filtered_df['PATNO'].nunique()} valid participants")
-        
-        return filtered_df
-    
-    def filter_by_min_visits(self, df: pd.DataFrame, min_visits: int = 3) -> pd.DataFrame:
-        """
-        Filter longitudinal data to only include patients with at least min_visits visits.
-        
-        Args:
-            df: Longitudinal DataFrame with PATNO column
-            min_visits: Minimum number of visits required (default: 3)
-            
-        Returns:
-            DataFrame filtered to only include patients with at least min_visits visits
-        """
-        if 'PATNO' not in df.columns:
-            raise ValueError("PATNO column is required to filter by minimum visits")
-        
-        # Count visits per patient
-        visit_counts = df['PATNO'].value_counts()
-        
-        # Get patients with at least min_visits visits
-        valid_patnos = visit_counts[visit_counts >= min_visits].index
-        
-        # Filter dataframe
-        filtered_df = df[df['PATNO'].isin(valid_patnos)].copy()
-        
-        removed_patients = len(visit_counts) - len(valid_patnos)
-        print(f"  Filtered to {len(filtered_df)} visits from {len(valid_patnos)} patients "
-              f"(removed {removed_patients} patients with <{min_visits} visits)")
         
         return filtered_df
     

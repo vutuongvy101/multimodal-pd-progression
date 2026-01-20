@@ -127,7 +127,7 @@ class TestDataIntegratorCreateFeatureVectors:
         mock_config.features.static_features = ['ENROLL_AGE', 'SEX']
         mock_config.features.motor_features = ['NP2PTOT', 'NP3TOT']
         mock_config.features.updrs_supplementary_features = ['NP1RTOT']
-        mock_config.features.clinical_features = []
+        mock_config.features.non_motor_features = []
         mock_config.features.medication_features = ['LEDD']
         mock_config.features.all_updrs_totals = ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']
         
@@ -201,8 +201,8 @@ class TestDataIntegratorCreateFeatureVectors:
         assert 'motor_mask' in visit
         assert 'updrs_supplementary_values' in visit
         assert 'updrs_supplementary_mask' in visit
-        assert 'clinical_values' in visit
-        assert 'clinical_mask' in visit
+        assert 'non_motor_values' in visit
+        assert 'non_motor_mask' in visit
         assert 'med_values' in visit
         assert 'med_mask' in visit
         assert 'time_months' in visit
@@ -232,7 +232,7 @@ class TestDataIntegratorCreateFeatureVectors:
         mock_config.features.static_features = ['ENROLL_AGE', 'SEX', 'MISSING_FEATURE']
         mock_config.features.motor_features = ['NP2PTOT']
         mock_config.features.updrs_supplementary_features = []
-        mock_config.features.clinical_features = []
+        mock_config.features.non_motor_features = []
         mock_config.features.medication_features = []
         mock_config.features.all_updrs_totals = ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']
         
@@ -272,17 +272,17 @@ class TestDataIntegratorCreateFeatureVectors:
         static_entry = result['static_data'][1]
         assert len(static_entry['values']) == 2  # Only 2 features present
         
-        # UPDRS supplementary, clinical, and med features should be empty arrays
+        # UPDRS supplementary, non-motor, and med features should be empty arrays
         visit = result['longitudinal_data'][1][0]
         assert len(visit['updrs_supplementary_values']) == 0
-        assert len(visit['clinical_values']) == 0
+        assert len(visit['non_motor_values']) == 0
         assert len(visit['med_values']) == 0
         
-        # Slopes should be dict with all UPDRS totals, -999 when missing
+        # Slopes should be dict with all UPDRS totals, NaN when missing
         assert isinstance(result['slopes'][1], dict)
         for total in mock_config.features.all_updrs_totals:
             assert f'{total}_slope' in result['slopes'][1]
-            assert result['slopes'][1][f'{total}_slope'] == -999.0
+            assert pd.isna(result['slopes'][1][f'{total}_slope'])
     
     def test_create_feature_vectors_handles_empty_longitudinal_data(self, test_config):
         """Test: Empty longitudinal data handled gracefully"""
@@ -319,11 +319,11 @@ class TestDataIntegratorCreateFeatureVectors:
         # Longitudinal data should be empty dict or have empty lists
         assert len(result['longitudinal_data']) == 0 or result['longitudinal_data'][1] == []
         
-        # Slopes should be dict with all UPDRS totals, -999 when missing
+        # Slopes should be dict with all UPDRS totals, NaN when missing
         assert isinstance(result['slopes'][1], dict)
         for total in mock_config.features.all_updrs_totals:
             assert f'{total}_slope' in result['slopes'][1]
-            assert result['slopes'][1][f'{total}_slope'] == -999.0
+            assert pd.isna(result['slopes'][1][f'{total}_slope'])
     
     def test_create_feature_vectors_sorts_visits_by_time(self, test_config):
         """Test: Visits are sorted by months_since_baseline"""
@@ -428,7 +428,7 @@ class TestDataIntegratorCreateFeatureVectors:
             mock_config.features.all_updrs_totals = ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']
             mock_config.features.motor_features = []
             mock_config.features.updrs_supplementary_features = []
-            mock_config.features.clinical_features = []
+            mock_config.features.non_motor_features = []
             mock_config.features.medication_features = []
             integrator.config = mock_config
             
@@ -564,7 +564,7 @@ class TestDataIntegratorMergeLongitudinalData:
         assert patient1_bl.iloc[0]['LEDD'] == 200.0
     
     def test_merge_longitudinal_data_handles_duplicate_months_columns(self, test_config):
-        """Test: Duplicate months_since_baseline columns are merged correctly"""
+        """Test: Duplicate months_since_baseline columns are merged_dataset correctly"""
         from data.data_integrator import DataIntegrator
         
         longitudinal_df = pd.DataFrame({
@@ -632,7 +632,7 @@ class TestDataIntegratorIntegration:
             visit = visits[0]
             required_keys = ['motor_values', 'motor_mask', 
                            'updrs_supplementary_values', 'updrs_supplementary_mask',
-                           'clinical_values', 'clinical_mask',
+                           'non_motor_values', 'non_motor_mask',
                            'med_values', 'med_mask', 
                            'time_months', 'updrs_totals', 'np3tot']
             for key in required_keys:
@@ -640,10 +640,10 @@ class TestDataIntegratorIntegration:
     
     @pytest.mark.slow
     def test_data_merging_pipeline_saves_to_merged_folder(self, test_config, skip_if_no_data, v1_root):
-        """Test: Full data merging pipeline and save to tests/test_outputs/merged for inspection
+        """Test: Full data merging pipeline and save to tests/test_outputs/merged_dataset for inspection
         
         This test runs prepare_final_dataset() which does all the data merging,
-        and saves the results to tests/test_outputs/merged/ folder for manual inspection.
+        and saves the results to tests/test_outputs/merged_dataset/ folder for manual inspection.
         """
         from data.data_integrator import DataIntegrator
         
@@ -652,7 +652,7 @@ class TestDataIntegratorIntegration:
         # Run the full merging pipeline
         prepared_data = integrator.prepare_final_dataset()
         
-        # Create merged data directory in test folder
+        # Create merged_dataset data directory in test folder
         merged_dir = v1_root / "tests" / "test_outputs" / "merged"
         merged_dir.mkdir(parents=True, exist_ok=True)
         
@@ -744,8 +744,8 @@ class TestDataIntegratorIntegration:
                     'motor_n_missing': int(visit['motor_mask'].sum()),
                     'updrs_supplementary_n_features': len(visit['updrs_supplementary_values']),
                     'updrs_supplementary_n_missing': int(visit['updrs_supplementary_mask'].sum()),
-                    'clinical_n_features': len(visit['clinical_values']),
-                    'clinical_n_missing': int(visit['clinical_mask'].sum()),
+                    'non_motor_n_features': len(visit['non_motor_values']),
+                    'non_motor_n_missing': int(visit['non_motor_mask'].sum()),
                     'med_n_features': len(visit['med_values']),
                     'med_n_missing': int(visit['med_mask'].sum()),
                     'np3tot': float(visit['np3tot']) if not np.isnan(visit['np3tot']) else np.nan,
@@ -778,14 +778,14 @@ class TestDataIntegratorIntegration:
             'n_patients': len(feature_vectors['static_data']),
             'n_patients_with_longitudinal': len(feature_vectors['longitudinal_data']),
             'n_patients_with_slopes': sum(1 for s_dict in feature_vectors['slopes'].values() 
-                                          if any(v != -999 for v in s_dict.values())),
+                                          if any(pd.notna(v) for v in s_dict.values())),
             'total_visits': sum(len(visits) for visits in feature_vectors['longitudinal_data'].values()),
             'static_n_features': len(static_feature_names),
             'motor_n_features': len([c for c in test_config.features.motor_features 
                                     if c in prepared_data['longitudinal'].columns]),
             'updrs_supplementary_n_features': len([c for c in test_config.features.updrs_supplementary_features
                                        if c in prepared_data['longitudinal'].columns]),
-            'clinical_n_features': len([c for c in test_config.features.clinical_features
+            'non_motor_n_features': len([c for c in test_config.features.non_motor_features
                                        if c in prepared_data['longitudinal'].columns]),
             'med_n_features': len([c for c in test_config.features.medication_features 
                                   if c in prepared_data['longitudinal'].columns]),
@@ -820,8 +820,8 @@ class TestDataIntegratorIntegration:
                         'motor_mask': visit['motor_mask'].tolist(),
                         'updrs_supplementary_values': visit['updrs_supplementary_values'].tolist(),
                         'updrs_supplementary_mask': visit['updrs_supplementary_mask'].tolist(),
-                        'clinical_values': visit['clinical_values'].tolist(),
-                        'clinical_mask': visit['clinical_mask'].tolist(),
+                        'non_motor_values': visit['non_motor_values'].tolist(),
+                        'non_motor_mask': visit['non_motor_mask'].tolist(),
                         'med_values': visit['med_values'].tolist(),
                         'med_mask': visit['med_mask'].tolist(),
                         'updrs_totals': [float(v) if not np.isnan(v) else None 

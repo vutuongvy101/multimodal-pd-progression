@@ -298,7 +298,7 @@ V1_implementation/
 │       ├── genetics_loader.py
 │       ├── demographics_loader.py
 │       ├── updrs_loader.py
-│       ├── clinical_loader.py
+│       ├── non_motor_loader.py
 │       ├── medication_loader.py
 │       └── __init__.py
 │
@@ -343,7 +343,7 @@ from data.visit_index_builder import VisitIndexBuilder
 
 builder = VisitIndexBuilder(config)
 visit_index = builder.build_from_sources(
-    source_dfs=[updrs_df, clinical_df, medication_df],
+    source_dfs=[updrs_df, non_motor_df, medication_df],
     valid_patnos=valid_patient_list
 )
 ```
@@ -377,7 +377,7 @@ All loaders inherit from base classes defined in `data/base_loader.py`:
 - **Helper methods**:
   - `compute_time_since_baseline()`: Computes `months_since_baseline` from dates or `EVENT_ID`
   - `filter_by_valid_participants()`: Filters visits to only valid participants
-- **Examples**: `UPDRSLoader`, `ClinicalAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`
+- **Examples**: `UPDRSLoader`, `NonMotorAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`
 
 #### Standardized Participant Filtering
 
@@ -400,7 +400,7 @@ self._load_and_filter_participants(config)  # Load and filter participant_status
 | **DemographicsLoader** | Static | Demographics, socioeconomic, family history | `PATNO` + demographics features |
 | **GeneticsLoader** | Static | Genetic consensus, PRS scores, principal components | `PATNO` + genetics features |
 | **UPDRSLoader** | Longitudinal | UPDRS Parts I-IV (motor/non-motor assessments) | `PATNO`, `EVENT_ID`, `months_since_baseline` + UPDRS features |
-| **ClinicalAssessmentsLoader** | Longitudinal | MoCA, ESS, SCOPA-AUT, Schwab & England | `PATNO`, `EVENT_ID`, `months_since_baseline` + clinical scores |
+| **NonMotorAssessmentsLoader** | Longitudinal | MoCA, ESS, SCOPA-AUT, Schwab & England | `PATNO`, `EVENT_ID`, `months_since_baseline` + non-motor scores |
 | **MedicationLoader** | Longitudinal | LEDD, medication history, ON/OFF status | `PATNO`, `EVENT_ID`, `months_since_baseline` + medication features |
 | **AgeAtVisitLoader** | Longitudinal | Age at each visit (varies by visit, not static) | `PATNO`, `EVENT_ID`, `months_since_baseline` + `AGE_AT_VISIT` |
 
@@ -414,7 +414,7 @@ self._load_and_filter_participants(config)  # Load and filter participant_status
 4. Return: DataFrame with PATNO + features
 ```
 
-**LongitudinalDataLoader pattern** (`UPDRSLoader`, `ClinicalAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`):
+**LongitudinalDataLoader pattern** (`UPDRSLoader`, `NonMotorAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`):
 ```python
 1. Load domain-specific data files
 2. Filter to valid participants (using filter_by_valid_participants)
@@ -437,7 +437,7 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
 │                                                                  │
 │ Longitudinal Data:                                               │
 │   updrs_df = updrs_loader.load()                                 │
-│   clinical_df = clinical_loader.load()  (optional)              │
+│   non_motor_df = non_motor_loader.load()  (optional)              │
 │   medication_df = medication_loader.load() (optional)           │
 │   age_at_visit_df = age_at_visit_loader.load() (optional)       │
 │   → Merge on [PATNO, EVENT_ID] → longitudinal_df                │
@@ -546,8 +546,8 @@ Raw PPMI CSV Files
     ├─→ UPDRSLoader ────────────────────────────┐
     │   └─→ updrs_df (PATNO, EVENT_ID, UPDRS)   │
     │                                           │
-    ├─→ ClinicalAssessmentsLoader ──────────────┤
-    │   └─→ clinical_df (PATNO, EVENT_ID, ...)  │
+    ├─→ NonMotorAssessmentsLoader ──────────────┤
+    │   └─→ non_motor_df (PATNO, EVENT_ID, ...)  │
     │                                           │
     ├─→ MedicationLoader ───────────────────────┤
     │   └─→ medication_df (PATNO, EVENT_ID, ...)├─→ longitudinal_df (merged)
@@ -884,7 +884,7 @@ tests/
     ├── test_demographics_loader.py
     ├── test_genetics_loader.py
     ├── test_updrs_loader.py
-    ├── test_clinical_loader.py
+    ├── test_non_motor_loader.py
     └── test_medication_loader.py
 ```
 

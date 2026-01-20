@@ -9,6 +9,11 @@ from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple
+try:
+    from sklearn.model_selection import KFold
+except ImportError:
+    # Fallback if sklearn not available
+    KFold = None
 
 
 class PPMILongitudinalDataset(Dataset):
@@ -22,7 +27,7 @@ class PPMILongitudinalDataset(Dataset):
         patient_ids: List[int],
         static_data: Dict[int, np.ndarray],  # PATNO -> static features
         longitudinal_data: Dict[int, List[Dict]],  # PATNO -> list of visits
-        slopes: Dict[int, float],  # PATNO -> empirical slope
+        slopes: Dict[int, Dict[str, float]],  # PATNO -> dict of slopes (e.g., {'NP3TOT_slope': 0.5})
         max_seq_len: int = 20
     ):
         """
@@ -37,7 +42,8 @@ class PPMILongitudinalDataset(Dataset):
                 - 'med_values': np.ndarray
                 - 'med_mask': np.ndarray
                 - 'time_months': float
-            slopes: Empirical slope for each patient (-999 if not available)
+            slopes: Dict of slopes per patient, with keys like 'NP3TOT_slope', 'NP1RTOT_slope', etc.
+                   Values are NaN if not available
             max_seq_len: Maximum sequence length (will truncate if longer)
         """
         self.patient_ids = patient_ids
@@ -122,8 +128,20 @@ class PPMILongitudinalDataset(Dataset):
         next_visit_targets = torch.FloatTensor(updrs_totals_filled)  # [seq_len, 4]
         next_visit_label_mask = torch.FloatTensor(label_mask)  # [seq_len, 4]
         
-        # Slope
-        slope_target = torch.FloatTensor([self.slopes.get(patno, -999)])
+        # Slope - extract NP3TOT_slope (primary motor progression) or use NaN
+        slope_dict = self.slopes.get(patno, {})
+        if isinstance(slope_dict, dict):
+            # Try NP3TOT_slope first (most important for motor progression)
+            slope_value = slope_dict.get('NP3TOT_slope', float('nan'))
+            # If NP3TOT not available, try to get any valid slope
+            if pd.isna(slope_value):
+                valid_slopes = [v for v in slope_dict.values() if pd.notna(v)]
+                slope_value = valid_slopes[0] if valid_slopes else float('nan')
+        else:
+            # Fallback if slopes is already a float (backward compatibility)
+            slope_value = slope_dict if not pd.isna(slope_dict) else float('nan')
+        
+        slope_target = torch.FloatTensor([slope_value])
         
         return {
             'static_values': static_values,
@@ -274,8 +292,45 @@ def create_dataloaders(
     if 'static' in prepared_data and isinstance(prepared_data['static'], pd.DataFrame):
         # Need to convert DataFrames to feature vectors with masking
         print("  Converting DataFrames to feature vectors (creating missing value masks)...")
-        integrator = DataIntegrator(config)
+        
+        # First, split patients into train/val/test BEFORE creating feature vectors
+        # This is important for proper normalization (fit scalers on training data only)
+        static_df = prepared_data['static']
+        longitudinal_df = prepared_data.get('longitudinal', pd.DataFrame())
+        
+        # Get all patient IDs
+        patient_ids = static_df['PATNO'].unique().tolist()
+        n_patients = len(patient_ids)
+        
+        print(f"  Total patients: {n_patients}")
+        print(f"  Splitting: train={train_ratio}, val={val_ratio}, test={test_ratio}")
+        
+        # Split patients into train/val/test
+        np.random.seed(random_seed)
+        shuffled_ids = patient_ids.copy()
+        np.random.shuffle(shuffled_ids)
+        
+        # First split: train vs (val+test)
+        train_size = int(n_patients * train_ratio)
+        train_ids = shuffled_ids[:train_size]
+        
+        # Second split: val vs test
+        remaining_ids = shuffled_ids[train_size:]
+        val_size = int(len(remaining_ids) * (val_ratio / (val_ratio + test_ratio)))
+        val_ids = remaining_ids[:val_size]
+        test_ids = remaining_ids[val_size:]
+        
+        print(f"  Train: {len(train_ids)} patients")
+        print(f"  Val: {len(val_ids)} patients")
+        print(f"  Test: {len(test_ids)} patients")
+        
+        # Create integrator and fit scalers on training data only
+        integrator = DataIntegrator(config, normalize_features=True)
+        integrator.fit_scalers(prepared_data, train_patnos=train_ids)
+        
+        # Now create feature vectors (will use fitted scalers for normalization)
         feature_vectors = integrator.create_feature_vectors(prepared_data)
+        
     elif 'static_data' in prepared_data:
         # Already in feature vector format (has 'static_data' key)
         feature_vectors = prepared_data
@@ -291,31 +346,33 @@ def create_dataloaders(
     longitudinal_data = feature_vectors['longitudinal_data']
     slopes = feature_vectors['slopes']
     
-    # Get all patient IDs
-    patient_ids = list(static_data.keys())
-    n_patients = len(patient_ids)
-    
-    print(f"  Total patients: {n_patients}")
-    print(f"  Splitting: train={train_ratio}, val={val_ratio}, test={test_ratio}")
-    
-    # Split patients into train/val/test
-    np.random.seed(random_seed)
-    shuffled_ids = patient_ids.copy()
-    np.random.shuffle(shuffled_ids)
-    
-    # First split: train vs (val+test)
-    train_size = int(n_patients * train_ratio)
-    train_ids = shuffled_ids[:train_size]
-    
-    # Second split: val vs test
-    remaining_ids = shuffled_ids[train_size:]
-    val_size = int(len(remaining_ids) * (val_ratio / (val_ratio + test_ratio)))
-    val_ids = remaining_ids[:val_size]
-    test_ids = remaining_ids[val_size:]
-    
-    print(f"  Train: {len(train_ids)} patients")
-    print(f"  Val: {len(val_ids)} patients")
-    print(f"  Test: {len(test_ids)} patients")
+    # Get all patient IDs and split into train/val/test
+    # (If we already split above, train_ids/val_ids/test_ids are already defined)
+    if 'train_ids' not in locals():
+        patient_ids = list(static_data.keys())
+        n_patients = len(patient_ids)
+        
+        print(f"  Total patients: {n_patients}")
+        print(f"  Splitting: train={train_ratio}, val={val_ratio}, test={test_ratio}")
+        
+        # Split patients into train/val/test
+        np.random.seed(random_seed)
+        shuffled_ids = patient_ids.copy()
+        np.random.shuffle(shuffled_ids)
+        
+        # First split: train vs (val+test)
+        train_size = int(n_patients * train_ratio)
+        train_ids = shuffled_ids[:train_size]
+        
+        # Second split: val vs test
+        remaining_ids = shuffled_ids[train_size:]
+        val_size = int(len(remaining_ids) * (val_ratio / (val_ratio + test_ratio)))
+        val_ids = remaining_ids[:val_size]
+        test_ids = remaining_ids[val_size:]
+        
+        print(f"  Train: {len(train_ids)} patients")
+        print(f"  Val: {len(val_ids)} patients")
+        print(f"  Test: {len(test_ids)} patients")
     
     # Create datasets
     max_seq_len = config.model.max_seq_len if hasattr(config, 'model') else getattr(config, 'max_seq_len', 20)
@@ -375,6 +432,182 @@ def create_dataloaders(
     print("  ✓ Dataloaders created successfully")
     
     return train_loader, val_loader, test_loader
+
+
+def create_kfold_dataloaders(
+    prepared_data: Dict,
+    config,
+    n_splits: int = 5,
+    num_workers: int = 0,
+    test_ratio: float = 0.2,
+    random_seed: int = 42
+) -> Tuple[List[Tuple[DataLoader, DataLoader]], DataLoader]:
+    """
+    Create k-fold cross-validation dataloaders with proper feature scaling.
+    
+    For each fold:
+    1. Fit scalers on training fold only
+    2. Apply scalers to validation fold
+    3. Create train/val dataloaders for that fold
+    
+    Args:
+        prepared_data: Output from data_integrator.prepare_final_dataset() (DataFrames)
+        config: Configuration dict
+        n_splits: Number of folds for cross-validation (default: 5)
+        num_workers: Number of workers for DataLoader
+        test_ratio: Proportion of patients to hold out as test set (default: 0.2)
+        random_seed: Random seed for patient splitting
+        
+    Returns:
+        Tuple of:
+            - List of (train_loader, val_loader) tuples, one per fold
+            - test_loader (fitted on all CV data, not test)
+    """
+    import sys
+    import os
+    
+    # Add parent directory to path for imports
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    
+    from data.data_integrator import DataIntegrator
+    
+    if KFold is None:
+        raise ImportError(
+            "sklearn is required for k-fold cross-validation. "
+            "Install with: pip install scikit-learn"
+        )
+    
+    print(f"Creating {n_splits}-fold cross-validation dataloaders...")
+    
+    # Must have DataFrames format (not already converted to feature vectors)
+    if 'static' not in prepared_data or not isinstance(prepared_data['static'], pd.DataFrame):
+        raise ValueError(
+            "prepared_data must be DataFrames format (output from prepare_final_dataset())\n"
+            "for k-fold CV, not pre-converted feature vectors"
+        )
+    
+    static_df = prepared_data['static']
+    
+    # Get all patient IDs
+    patient_ids = static_df['PATNO'].unique().tolist()
+    n_patients = len(patient_ids)
+    
+    print(f"  Total patients: {n_patients}")
+    
+    # First, split out test set (held out from CV)
+    np.random.seed(random_seed)
+    shuffled_ids = patient_ids.copy()
+    np.random.shuffle(shuffled_ids)
+    
+    test_size = int(n_patients * test_ratio)
+    test_ids = shuffled_ids[:test_size]
+    cv_ids = shuffled_ids[test_size:]  # Remaining patients for CV
+    
+    print(f"  Test set: {len(test_ids)} patients (held out)")
+    print(f"  CV set: {len(cv_ids)} patients (for {n_splits}-fold CV)")
+    
+    # Create k-fold splits
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
+    fold_splits = list(kf.split(cv_ids))
+    
+    # Create test loader (fit scalers on all CV data, apply to test)
+    print("\n--- Creating Test Loader ---")
+    test_integrator = DataIntegrator(config, normalize_features=True)
+    test_integrator.fit_scalers(prepared_data, train_patnos=cv_ids)  # Fit on CV data
+    test_feature_vectors = test_integrator.create_feature_vectors(prepared_data)
+    
+    test_static_data = test_feature_vectors['static_data']
+    test_longitudinal_data = test_feature_vectors['longitudinal_data']
+    test_slopes = test_feature_vectors['slopes']
+    
+    max_seq_len = config.model.max_seq_len if hasattr(config, 'model') else getattr(config, 'max_seq_len', 20)
+    batch_size = config.training.batch_size if hasattr(config, 'training') else getattr(config, 'batch_size', 32)
+    
+    test_dataset = PPMILongitudinalDataset(
+        patient_ids=test_ids,
+        static_data=test_static_data,
+        longitudinal_data=test_longitudinal_data,
+        slopes=test_slopes,
+        max_seq_len=max_seq_len
+    )
+    
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=num_workers
+    )
+    
+    print(f"  ✓ Test loader created: {len(test_ids)} patients")
+    
+    # Create dataloaders for each fold
+    fold_dataloaders = []
+    
+    for fold_idx, (train_indices, val_indices) in enumerate(fold_splits):
+        print(f"\n--- Creating Fold {fold_idx + 1}/{n_splits} ---")
+        
+        # Get patient IDs for this fold
+        fold_train_ids = [cv_ids[i] for i in train_indices]
+        fold_val_ids = [cv_ids[i] for i in val_indices]
+        
+        print(f"  Train: {len(fold_train_ids)} patients")
+        print(f"  Val: {len(fold_val_ids)} patients")
+        
+        # Create integrator for this fold
+        # IMPORTANT: Fit scalers on training fold only
+        fold_integrator = DataIntegrator(config, normalize_features=True)
+        fold_integrator.fit_scalers(prepared_data, train_patnos=fold_train_ids)
+        
+        # Create feature vectors (will use scalers fitted on training fold)
+        fold_feature_vectors = fold_integrator.create_feature_vectors(prepared_data)
+        
+        fold_static_data = fold_feature_vectors['static_data']
+        fold_longitudinal_data = fold_feature_vectors['longitudinal_data']
+        fold_slopes = fold_feature_vectors['slopes']
+        
+        # Create datasets for this fold
+        train_dataset = PPMILongitudinalDataset(
+            patient_ids=fold_train_ids,
+            static_data=fold_static_data,
+            longitudinal_data=fold_longitudinal_data,
+            slopes=fold_slopes,
+            max_seq_len=max_seq_len
+        )
+        
+        val_dataset = PPMILongitudinalDataset(
+            patient_ids=fold_val_ids,
+            static_data=fold_static_data,
+            longitudinal_data=fold_longitudinal_data,
+            slopes=fold_slopes,
+            max_seq_len=max_seq_len
+        )
+        
+        # Create dataloaders
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=num_workers
+        )
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=num_workers
+        )
+        
+        fold_dataloaders.append((train_loader, val_loader))
+        print(f"  ✓ Fold {fold_idx + 1} dataloaders created")
+    
+    print(f"\n✓ Created {n_splits} folds + test loader")
+    
+    return fold_dataloaders, test_loader
 
 
 if __name__ == "__main__":

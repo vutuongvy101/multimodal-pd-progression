@@ -76,14 +76,14 @@ class V1MultimodalTransformer(nn.Module):
         
         if 'motor' in self.enabled_modalities:
             n_motor = len(feature_config.motor_features)
-            motor_mlp_dims = model_config.get_mlp_dims(modality='part3')
+            motor_mlp_dims = model_config.get_mlp_dims(modality='motor')
             self.motor_embedding = VisitFeatureEmbedding(
                 n_motor, d_model, motor_mlp_dims, model_config.dropout
             )
         
         if 'nonmotor' in self.enabled_modalities:
-            n_nonmotor = len(feature_config.nonmotor_features)
-            nonmotor_mlp_dims = model_config.get_mlp_dims(modality='part1')
+            n_nonmotor = len(feature_config.non_motor_features)
+            nonmotor_mlp_dims = model_config.get_mlp_dims(modality='non_motor')
             self.nonmotor_embedding = VisitFeatureEmbedding(
                 n_nonmotor, d_model, nonmotor_mlp_dims, model_config.dropout
             )
@@ -284,8 +284,8 @@ class V1MultimodalTransformer(nn.Module):
         slope_preds = predictions['slope']  # [batch]
         slope_targets = targets['slope']  # [batch]
         
-        # Filter out patients without slope targets (NaN or -999)
-        valid_slopes = ~torch.isnan(slope_targets) & (slope_targets != -999)
+        # Filter out patients without slope targets (NaN)
+        valid_slopes = ~torch.isnan(slope_targets)
         if valid_slopes.any():
             loss_slope = nn.functional.mse_loss(
                 slope_preds[valid_slopes],
@@ -334,7 +334,7 @@ if __name__ == "__main__":
     
     n_static = len(config.features.static_features)
     n_motor = len(config.features.motor_features)
-    n_nonmotor = len(config.features.nonmotor_features)
+    n_nonmotor = len(config.features.non_motor_features)  # 'nonmotor' maps to non_motor_features
     n_med = len(config.features.medication_features)
     n_targets = len(config.model.predict_totals)
     

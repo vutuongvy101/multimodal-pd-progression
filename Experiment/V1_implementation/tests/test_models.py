@@ -132,7 +132,7 @@ class TestV1Model:
         # Determine feature dimensions from FeatureConfig
         n_static = len(test_config.features.static_features)
         n_motor = len(test_config.features.motor_features)
-        n_nonmotor = len(test_config.features.nonmotor_features)
+        n_nonmotor = len(test_config.features.non_motor_features)
         n_med = len(test_config.features.medication_features)
         n_targets = len(test_config.model.predict_totals)
 

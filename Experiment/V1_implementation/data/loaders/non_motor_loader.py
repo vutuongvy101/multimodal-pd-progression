@@ -1,6 +1,6 @@
 """
-Task 4: Clinical Assessments Loader
-Load additional clinical assessments (MoCA, sleep, autonomic, QoL)
+Task 4: Non-Motor Assessments Loader
+Load additional non-motor assessments (MoCA, sleep, autonomic, QoL)
 """
 
 import os
@@ -15,9 +15,9 @@ from training.config import DataConfig
 _log = logging.getLogger(__name__)
 
 
-class ClinicalAssessmentsLoader(LongitudinalDataLoader):
+class NonMotorAssessmentsLoader(LongitudinalDataLoader):
     """
-    Loads non-UPDRS clinical assessments:
+    Loads non-UPDRS non-motor assessments:
     - MoCA (cognitive)
     - ESS (sleep)
     - SCOPA-AUT (autonomic)
@@ -35,7 +35,7 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
         
     def __load_data_file__(self, file_path_config: str, feature_list: List[str], file_name: str, required: bool = False) -> pd.DataFrame:
         """
-        Generic loader for clinical assessment CSVs. Returns empty DataFrame on failure.
+        Generic loader for non-motor assessment CSVs. Returns empty DataFrame on failure.
         """
         import logging
         _log = logging.getLogger(__name__)
@@ -83,55 +83,55 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
             return pd.DataFrame()
     def _load_raw(self) -> pd.DataFrame:
         """
-        Load clinical assessments and merge them
+        Load non-motor assessments and merge them
         
         Returns:
-            DataFrame with PATNO, EVENT_ID, months_since_baseline, and clinical scores
+            DataFrame with PATNO, EVENT_ID, months_since_baseline, and non-motor scores
         """
-        clinical_dfs = []
+        non_motor_dfs = []
 
         moca_df = self.__load_data_file__('moca', self.config.features.moca_features, 'MoCA (cognitive)', required=False)
         if len(moca_df) > 0:
-            clinical_dfs.append(('MoCA', moca_df))
+            non_motor_dfs.append(('MoCA', moca_df))
 
         ess_df = self.__load_data_file__('ess', self.config.features.ess_features, 'ESS (Epworth Sleepiness Scale)', required=False)
         if len(ess_df) > 0:
-            clinical_dfs.append(('ESS', ess_df))
+            non_motor_dfs.append(('ESS', ess_df))
 
         scopa_df = self.__load_data_file__('scopa_aut', self.config.features.scopa_aut_features, 'SCOPA-AUT (autonomic)', required=False)
         if len(scopa_df) > 0:
-            clinical_dfs.append(('SCOPA-AUT', scopa_df))
+            non_motor_dfs.append(('SCOPA-AUT', scopa_df))
 
         se_df = self.__load_data_file__('schwab_england', self.config.features.schwab_england_features, 'Schwab & England (ADL)', required=False)
         if len(se_df) > 0:
-            clinical_dfs.append(('Schwab & England', se_df))
+            non_motor_dfs.append(('Schwab & England', se_df))
 
-        if len(clinical_dfs) == 0:
-            raise ValueError("Could not load any clinical assessments")
+        if len(non_motor_dfs) == 0:
+            raise ValueError("Could not load any non-motor assessments")
 
-        clinical_df = None
-        for name, df in clinical_dfs:
-            if clinical_df is None:
-                clinical_df = df
+        non_motor_df = None
+        for name, df in non_motor_dfs:
+            if non_motor_df is None:
+                non_motor_df = df
             else:
-                clinical_df = clinical_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
-                clinical_df = clinical_df.loc[:, ~clinical_df.columns.str.endswith('_dup')]
+                non_motor_df = non_motor_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
+                non_motor_df = non_motor_df.loc[:, ~non_motor_df.columns.str.endswith('_dup')]
 
-        print(f"✓ Merged clinical data: {len(clinical_df)} visits, {len(clinical_df.columns)-3} features")
-        return clinical_df
+        print(f"✓ Merged non-motor data: {len(non_motor_df)} visits, {len(non_motor_df.columns)-3} features")
+        return non_motor_df
 
     def get_required_columns(self) -> List[str]:
-        """Return list of required columns for clinical assessments."""
-        return ['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.clinical_features
+        """Return list of required columns for non-motor assessments."""
+        return ['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.non_motor_features
 
     def validate(self, df: pd.DataFrame) -> bool:
-        """Validate clinical DataFrame has required columns and at least one clinical feature."""
+        """Validate non-motor DataFrame has required columns and at least one non-motor feature."""
         if df is None or len(df) == 0:
-            raise ValueError("Clinical DataFrame is empty or None")
+            raise ValueError("Non-motor DataFrame is empty or None")
 
-        clinical_cols = [c for c in df.columns if c in self.config.features.clinical_features]
-        if len(clinical_cols) == 0:
-            raise ValueError("No clinical assessment columns found")
+        non_motor_cols = [c for c in df.columns if c in self.config.features.non_motor_features]
+        if len(non_motor_cols) == 0:
+            raise ValueError("No non-motor assessment columns found")
 
         required_cols = self.get_required_columns()
         missing_cols = set(required_cols) - set(df.columns.to_list())
@@ -143,6 +143,5 @@ class ClinicalAssessmentsLoader(LongitudinalDataLoader):
             _log.warning(f"Extra columns found (not required): {sorted(extra_cols)}")
 
         _log.info(f"✓ Validation passed: {len(df)} visits across {df['PATNO'].nunique()} patients")
-        _log.info(f"  Available assessments: {', '.join(clinical_cols)}")
+        _log.info(f"  Available assessments: {', '.join(non_motor_cols)}")
         return True
-

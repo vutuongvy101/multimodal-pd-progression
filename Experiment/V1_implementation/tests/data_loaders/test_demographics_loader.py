@@ -49,7 +49,7 @@ class TestDemographicsLoaderLoadAndMergeData:
         
         Example Output:
         - Input merge_columns: ['PATNO', 'EDUCYRS']
-        - Actual merged columns: ['EDUCYRS'] (PATNO removed)
+        - Actual merged_dataset columns: ['EDUCYRS'] (PATNO removed)
         - Result: No 'PATNO already exists' error
         """
         from data.loaders.demographics_loader import DemographicsLoader
@@ -440,7 +440,7 @@ class TestDemographicsLoaderIntegration:
         unique_patients = demo_df['PATNO'].nunique()
         total_rows = len(demo_df)
         
-        # If age_at_visit was merged, might have multiple rows per patient
+        # If age_at_visit was merged_dataset, might have multiple rows per patient
         assert unique_patients > 0
         assert total_rows >= unique_patients
     

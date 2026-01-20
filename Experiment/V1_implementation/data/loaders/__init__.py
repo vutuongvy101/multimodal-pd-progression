@@ -8,7 +8,7 @@ try:
     from .genetics_loader import GeneticsLoader
     from .demographics_loader import DemographicsLoader
     from .updrs_loader import UPDRSLoader
-    from .clinical_loader import ClinicalAssessmentsLoader
+    from .non_motor_loader import NonMotorAssessmentsLoader
     from .medication_loader import MedicationLoader
     from .age_at_visit_loader import AgeAtVisitLoader
 except ImportError:
@@ -16,7 +16,7 @@ except ImportError:
     from data.loaders.genetics_loader import GeneticsLoader
     from data.loaders.demographics_loader import DemographicsLoader
     from data.loaders.updrs_loader import UPDRSLoader
-    from data.loaders.clinical_loader import ClinicalAssessmentsLoader
+    from data.loaders.non_motor_loader import NonMotorAssessmentsLoader
     from data.loaders.medication_loader import MedicationLoader
     from data.loaders.age_at_visit_loader import AgeAtVisitLoader
 
@@ -24,7 +24,7 @@ __all__ = [
     'GeneticsLoader',
     'DemographicsLoader',
     'UPDRSLoader',
-    'ClinicalAssessmentsLoader',
+    'NonMotorAssessmentsLoader',
     'MedicationLoader',
     'AgeAtVisitLoader'
 ]

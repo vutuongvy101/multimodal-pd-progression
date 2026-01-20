@@ -192,7 +192,7 @@ class FeatureConfig:
         return ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']
 
 
-    # Clinical assessment source column names
+    # Non-motor assessment source column names
     # Cognitive
     moca_features: List[str] = field(default_factory=lambda: ['MCATOT'])
     # Sleep (Epworth Sleepiness Scale)
@@ -205,7 +205,7 @@ class FeatureConfig:
         'SCAU21', 'SCAU22', 'SCAU23', 'SCAU24', 'SCAU25'])
 
     @property
-    def clinical_features(self) -> List[str]:
+    def non_motor_features(self) -> List[str]:
         """Additional non-motor assessments (normalized output column names)"""
         return self.moca_features + self.ess_features + self.scopa_aut_features
 
@@ -251,14 +251,6 @@ def calculate_mlp_dims(n_features: int, d_model: int = 256,
     
     Returns:
         List of hidden layer dimensions [first_hidden, d_model]
-    
-    Examples:
-        >>> calculate_mlp_dims(14)  # Small modality
-        [64, 256]
-        >>> calculate_mlp_dims(33)  # Large modality
-        [128, 256]
-        >>> calculate_mlp_dims(50)  # Very large
-        [128, 256]
     """
     input_dim = n_features * 2  # values + masks
 
@@ -347,8 +339,10 @@ class ModelConfig:
             'part2': ('part2_mlp_dims', feature_config.part2_features),
             'part3': ('part3_mlp_dims', feature_config.part3_features),
             'part4': ('part4_mlp_dims', feature_config.part4_features),
+            'motor': ('motor', feature_config.motor_features),
             'med': ('med_mlp_dims', feature_config.medication_features),
-            'other': ('other_mlp_dims', feature_config.other_nonmotor_features),
+            'non_motor': ('other_mlp_dims', feature_config.non_motor_features),
+            'age_at_visit': ('age_at_mlp_dims', feature_config.age_at_visit_features),
         }
 
         if modality not in modality_map:
@@ -365,24 +359,9 @@ class ModelConfig:
         n_features = len(feature_list)
         return calculate_mlp_dims(n_features, self.d_model)
 
-    # Backward compatibility methods (no longer require feature_config)
-    def motor_mlp_dims(self, feature_config: Optional['FeatureConfig'] = None) -> List[int]:
-        """Get motor MLP dims (uses part3)"""
-        # Uses self._feature_config (single source of truth) - feature_config param for backward compat
-        if self.part3_mlp_dims is not None:
-            return self.part3_mlp_dims
-        return self.get_mlp_dims(modality='part3')
-
-    def nonmotor_mlp_dims(self, feature_config: Optional['FeatureConfig'] = None) -> List[int]:
-        """Get non-motor MLP dims (uses part1)"""
-        # Uses self._feature_config (single source of truth) - feature_config param for backward compat
-        if self.part1_mlp_dims is not None:
-            return self.part1_mlp_dims
-        return self.get_mlp_dims(modality='part1')
-
-    # Prediction targets
-    predict_totals: List[str] = field(default_factory=lambda: ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
+    # Prediction targets:
     # All UPDRS totals: NP1RTOT (non-motor), NP2PTOT (motor ADL), NP3TOT (motor exam), NP4TOT (complications)
+    predict_totals: List[str] = field(default_factory=lambda: ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
 
     # Prediction heads
     next_visit_hidden_dims: List[int] = field(default_factory=lambda: [128, 64])
@@ -467,7 +446,7 @@ class DataConfig:
     neuro_qol_upper: str = "Motor___MDS-UPDRS/Neuro_QoL__Upper_Extremity_Function_-_Short_Form_14Dec2025.csv"
     participant_motor: str = "Motor___MDS-UPDRS/Participant_Motor_Function_Questionnaire_14Dec2025.csv"
 
-    # Non-motor clinical files
+    # Non-motor assessment files
     moca: str = "Non-motor_Assessments/Montreal_Cognitive_Assessment__MoCA__14Dec2025.csv"
     ess: str = "Non-motor_Assessments/Epworth_Sleepiness_Scale_14Dec2025.csv"
     scopa_aut: str = "Non-motor_Assessments/SCOPA-AUT_14Dec2025.csv"

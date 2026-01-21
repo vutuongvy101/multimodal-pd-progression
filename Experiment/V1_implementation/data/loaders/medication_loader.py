@@ -143,6 +143,10 @@ class MedicationLoader(LongitudinalDataLoader):
             med_df = med_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
             # Remove duplicate columns
             med_df = med_df.loc[:, ~med_df.columns.str.endswith('_dup')]
+
+        # Ensure LEDD is numeric if present (can be parsed as object/string from CSVs)
+        if 'LEDD' in med_df.columns:
+            med_df['LEDD'] = pd.to_numeric(med_df['LEDD'], errors='coerce')
         
         print(f"✓ Medication data: {len(med_df)} visits, {len(med_df.columns)-2} features (after merge)")
         return med_df
@@ -162,7 +166,9 @@ class MedicationLoader(LongitudinalDataLoader):
         
         # Check LEDD if present
         if 'LEDD' in df.columns:
-            ledd_range = df['LEDD'].dropna()
+            # LEDD may come in as object/string after merges or CSV parsing; coerce safely.
+            ledd_numeric = pd.to_numeric(df['LEDD'], errors='coerce')
+            ledd_range = ledd_numeric.dropna()
             if len(ledd_range) > 0:
                 if ledd_range.min() < 0:
                     print(f"⚠️  Warning: Negative LEDD values found")

@@ -183,14 +183,32 @@ config.model.enabled_modalities = ['static', 'motor', 'nonmotor']
 
 ### 1. Activate Virtual Environment
 
+You can use either **conda** or **pyenv (virtualenv)**.
+
+#### Option A: conda
+
 ```bash
 conda activate sri_hri
+```
+
+#### Option B: pyenv (virtualenv)
+
+```bash
+# Example (adjust python version as needed)
+pyenv install -s 3.10.13
+
+# Create and activate a dedicated virtualenv for this project
+pyenv virtualenv 3.10.13 pd-v1
+pyenv activate pd-v1
+
+python -m pip install --upgrade pip
 ```
 
 ### 2. Install Dependencies
 
 ```bash
-pip install torch numpy pandas scipy tqdm
+# From git/pdS22025/Experiment/V1_implementation
+python -m pip install -r ../../requirements.txt
 ```
 
 ### 3. Install Package in Editable Mode (Optional but Recommended)
@@ -201,7 +219,7 @@ Install the V1 package in editable mode so that imports work properly and IDE su
 # Make sure you're in the V1_implementation directory
 cd V1_implementation
 
-# Install in editable mode (use the same conda environment)
+# Install in editable mode (use the same virtual environment)
 pip install -e .
 ```
 
@@ -210,7 +228,7 @@ This will install the package in development mode, which means:
 - IDEs like IntelliJ/PyCharm can better resolve imports (especially `from training.config import ...`)
 - The package is only installed in your current virtual environment
 
-**Note**: If you're using IntelliJ/PyCharm, make sure your IDE is configured to use the Python interpreter from your conda environment (Settings → Project → Python Interpreter).
+**Note**: If you're using IntelliJ/PyCharm, make sure your IDE is configured to use the Python interpreter from your active virtual environment (Settings → Project → Python Interpreter).
 
 ### 4. Configure Data Paths
 
@@ -1015,11 +1033,14 @@ tests/
 
 #### Prerequisites
 
-Install pytest and optional testing dependencies:
+Install dependencies (includes `pytest`). Optionally install `pytest-cov` for coverage:
 
 ```bash
-conda activate sri_hri
-pip install pytest pytest-cov
+# From V1_implementation directory
+python -m pip install -r ../../requirements.txt
+
+# Optional: coverage support
+python -m pip install pytest-cov
 ```
 
 #### Run All Tests

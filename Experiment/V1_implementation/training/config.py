@@ -303,7 +303,10 @@ class ModelConfig:
     part2_mlp_dims: Optional[List[int]] = None
     part3_mlp_dims: Optional[List[int]] = None
     part4_mlp_dims: Optional[List[int]] = None
+    motor_mlp_dims: Optional[List[int]] = None
+    non_motor_mlp_dims: Optional[List[int]] = None
     med_mlp_dims: Optional[List[int]] = None
+    age_at_mlp_dims: Optional[List[int]] = None
     other_mlp_dims: Optional[List[int]] = None
 
     # Internal reference to FeatureConfig (set by parent Config during initialization)

@@ -1,0 +1,21 @@
+#
+# Dependencies for git/pdS22025/ (Experiment code)
+#
+# Notes:
+# - PyTorch install can be platform-specific (CUDA vs Apple Silicon MPS). If you
+#   need a specific build, install torch first per official instructions, then:
+#     pip install -r requirements.txt
+#
+
+numpy>=1.23
+pandas>=1.5
+scipy>=1.9
+scikit-learn>=1.1
+tqdm>=4.64
+
+# Deep learning
+torch>=2.0
+
+# Tests (optional but included because tests import pytest)
+pytest>=7.0
+

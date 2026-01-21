@@ -1,0 +1,591 @@
+"""
+Configuration for V1 Multimodal Longitudinal Transformer
+"""
+
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict
+from pathlib import Path
+import os
+import torch
+
+# TODO: Changed FeatureConfig name to FeatureConfig_v2 to avoid conflict with V1
+# TODO: Changed DataConfig name to DataConfig_v2 to avoid conflict with V1
+# TODO: Changed Config name to Config_v2 to avoid conflict with V1
+
+# TODO: Check columns on static_data output and why columns are duplicated
+
+@dataclass
+class FeatureConfig_v2:
+    """Configuration for feature groups"""
+
+    # Static features (genetics + demographics)
+    # Internal genetic feature components (use genetics_features property for public access)
+    monogenic_variants_features: List[str] = field(default_factory=lambda: [
+        'LRRK2', 'GBA', 'SNCA', 'PRKN', 'APOE', 'PATHVAR_COUNT', 'VAR_GENE'
+    ])
+    polygenic_features: List[str] = field(default_factory=lambda: [
+        'GP2_PGS', 'META5_PGS', 'META5_excl_LRRK2_GBA_PGS',
+    ])
+    genetic_principal_components_features: List[str] = field(default_factory=lambda: [
+        'Genetic_PRS_PC1', 'Genetic_PRS_PC2', 'Genetic_PRS_PC3', 'Genetic_PRS_PC4', 'Genetic_PRS_PC5',
+        'Genetic_PRS_PC6', 'Genetic_PRS_PC7', 'Genetic_PRS_PC8', 'Genetic_PRS_PC9', 'Genetic_PRS_PC10',
+    ])
+
+    @property
+    def genetics_features(self) -> List[str]:
+        """Combined genetics features"""
+        return (
+                self.monogenic_variants_features +
+                self.polygenic_features +
+                self.genetic_principal_components_features
+        )
+
+    # Age at visit
+    age_at_visit_features: List[str] = field(default_factory=lambda: [
+        'AGE_AT_VISIT'
+    ])
+
+    # Demographics - Socioeconomic Status
+    socioeconomic_features: List[str] = field(default_factory=lambda: [
+        'EDUCYRS'  # Education years
+    ])
+
+    # Demographics - Basic Demographics
+    basic_demographics_features: List[str] = field(default_factory=lambda: [
+        'SEX', 'HANDED',
+        # Descent
+        'AFICBERB', 'ASHKJEW', 'BASQUE',
+        # Sexuality
+        'HOWLIVE', 'GAYLES', 'HETERO', 'BISEXUAL', 'PANSEXUAL', 'ASEXUAL', 'OTHSEXUALITY',
+        # Ethnicity/Race
+        'HISPLAT', 'RAASIAN', 'RABLACK', 'RAHAWOPI', 'RAINDALS', 'RANOS', 'RAWHITE', 'RAUNKNOWN'
+    ])
+
+    # Demographics - Family History
+    family_history_features: List[str] = field(default_factory=lambda: [
+        'ANYFAMPD',
+        # 1st degree family
+        'BIOMOM', 'BIOMOMPD', 'BIODAD', 'BIODADPD',
+        'FULSIB', 'FULBRO', 'FULSIS', 'FULSIBPD', 'FULBROPD', 'FULSISPD',
+        'KIDSPD',
+        # 2nd degree family
+        'HAFSIB', 'PAHAFSIB', 'MAHAFSIB', 'HAFSIBPD', 'MAHAFSIBPD',
+        'PAHAFSIBPD', 'MAGPAR', 'MAGPARPD', 'MAGFATHPD', 'MAGMOTHPD', 'PAGPAR',
+        'PAGPARPD', 'PAGFATHPD', 'PAGMOTHPD', 'MATAU', 'MATAUPD', 'PATAU',
+        'PATAUPD', 'MATCOUS', 'MATCOUSPD',
+        'PATCOUS', 'PATCOUSPD',
+        'DISFAMPD'
+    ])
+
+    @property
+    def demographics_features(self) -> List[str]:
+        """Combined demographics features (socioeconomic + basic + family history)"""
+        return (
+            self.socioeconomic_features +
+            self.basic_demographics_features +
+            self.family_history_features
+        )
+
+    # Motor Modality Features
+    # Part II - Motor experiences of daily living (patient-reported)
+    part2_features: List[str] = field(default_factory=lambda: [
+        'NP2SPCH', 'NP2SALV', 'NP2SWAL', # Bulbar
+        'NP2EAT', 'NP2DRES', 'NP2HYGN', 'NP2HWRT', 'NP2HOBB', # Fine Motor
+        'NP2TURN', 'NP2RISE', 'NP2WALK', 'NP2FREZ', # Mobility
+        'NP2TRMR', # Tremor
+        'NP2PTOT'  # Part II total
+    ])
+
+    # Part III - Motor examination (clinician-observed)
+    part3_features: List[str] = field(default_factory=lambda: [
+        #  Bulbar
+        'NP3SPCH', 'NP3FACXP',
+        # Rigidity
+        'NP3RIGN', 'NP3RIGRU', 'NP3RIGLU', 'NP3RIGRL', 'NP3RIGLL',
+        # Bradykinesia
+        'NP3FTAPR', 'NP3FTAPL', 'NP3HMOVR', 'NP3HMOVL', 'NP3PRSPR', 'NP3PRSPL',
+        'NP3TTAPR', 'NP3TTAPL', 'NP3LGAGR', 'NP3LGAGL',
+        # PIGD
+        'NP3RISNG', 'NP3GAIT', 'NP3BRADY',
+        'NP3FRZGT', 'NP3PSTBL', 'NP3POSTR',
+        'NP3PTRMR', 'NP3PTRML',
+        # Tremor
+        'NP3KTRMR', 'NP3KTRML', 'NP3RTARU', 'NP3RTALU', 'NP3RTARL',
+        'NP3RTALL','NP3RTALJ', 'NP3RTCON',
+        # Hoehn & Yahr Stage
+        'NHY',
+        'NP3TOT'  # Part III total
+    ])
+
+    # Part IV - Motor complications
+    part4_features: List[str] = field(default_factory=lambda: [
+        # Fluctuations
+        'NP4WDYSK', 'NP4DYSKI',
+        # Dyskinesias
+        'NP4OFF', 'NP4FLCTI', 'NP4FLCTX',
+        # Dystonia
+        'NP4DYSTN',
+        'NP4TOT'  # Part IV total
+    ])
+
+    # Additional motor assessments
+    schwab_england_features: List[str] = field(default_factory=lambda: [
+        'MSEADLG'  # Modified Schwab & England ADL scale
+    ])
+
+    neuro_qol_lower_features: List[str] = field(default_factory=lambda: [
+        'NQMOB37', 'NQMOB30', 'NQMOB26', 'NQMOB32', 'NQMOB25', 'NQMOB33', 'NQMOB31', 'NQMOB28'
+    ])
+
+    neuro_qol_upper_features: List[str] = field(default_factory=lambda: [
+        'NQUEX29', 'NQUEX20', 'NQUEX44', 'NQUEX36', 'NQUEX30', 'NQUEX28', 'NQUEX33', 'NQUEX37'
+    ])
+
+    # Convenience groupings for backward compatibility
+    @property
+    def motor_features(self) -> List[str]:
+        """Combined motor features (Parts II + III + IV)
+        Part II: Motor experiences of daily living (patient-reported)
+        Part III: Motor examination (clinician-observed)
+        Part IV: Motor complications (dyskinesia, OFF time, fluctuations, dystonia)
+        Schwab & England, Neuro QoL (lower and upper extremity)
+        """
+        return (self.part2_features + self.part3_features + self.part4_features + self.schwab_england_features 
+                + self.neuro_qol_lower_features + self.neuro_qol_upper_features)
+
+    @property
+    def overall_motor_severity_score(self) -> List[str]:
+        """Overall Motor severity scores"""
+        return ['NP2PTOT', 'NP3TOT', 'NP4TOT']
+
+
+    # Non-motor Modality Features
+    # Cognitive 
+    # MoCA (Montreal Cognitive Assessment)
+    moca_features: List[str] = field(default_factory=lambda: ['MCATOT'])
+
+    # Behavioral 
+    # SCOPA-AUT (SCales for Outcomes in PArkinson’s disease - Autonomic)
+    scopa_aut_features: List[str] = field(default_factory=lambda: [
+        'SCAU1', 'SCAU2', 'SCAU3', 'SCAU4', 'SCAU5', 'SCAU6', 'SCAU7', 'SCAU8', 'SCAU9', 'SCAU10',
+        'SCAU11', 'SCAU12', 'SCAU13', 'SCAU14', 'SCAU15', 'SCAU16', 'SCAU17', 'SCAU18', 'SCAU19', 'SCAU20',
+        'SCAU21', 'SCAU22', 'SCAU23', 'SCAU24', 'SCAU25'
+    ])
+
+    # Sleep 
+    # ESS (Epworth Sleepiness Scale)
+    ess_features: List[str] = field(
+        default_factory=lambda: ['ESS1', 'ESS2', 'ESS3', 'ESS4', 'ESS5', 'ESS6', 'ESS7', 'ESS8'])
+    
+    # RBD (Rapid Eye Movement Sleep Behavior Disorder Questionnaire)
+    rbd_features: List[str] = field(default_factory=lambda: [
+        'DRMVIVID', 'DRMAGRAC', 'DRMNOCTB', 'SLPLMBMV', 'SLPINJUR', 'DRMVERBL',
+        'DRMFIGHT', 'DRMUMV', 'DRMOBJFL', 'MVAWAKEN', 'DRMREMEM', 'SLPDSTRB','STROKE', 
+        'HETRA', 'PARKISM', 'RLS', 'NARCLPSY', 'DEPRS', 'EPILEPSY', 'BRNINFM'
+    ])
+
+    # Smell 
+    # UPSIT (University of Pennsylvania Smell Identification Test)
+    smell_features: List[str] = field(default_factory=lambda: [
+        'SCENT_01_CORRECT',
+        'SCENT_01_RESPONSE', 'SCENT_02_CORRECT', 'SCENT_02_RESPONSE',
+        'SCENT_03_CORRECT', 'SCENT_03_RESPONSE', 'SCENT_04_CORRECT',
+        'SCENT_04_RESPONSE', 'SCENT_05_CORRECT', 'SCENT_05_RESPONSE',
+        'SCENT_06_CORRECT', 'SCENT_06_RESPONSE', 'SCENT_07_CORRECT',
+        'SCENT_07_RESPONSE', 'SCENT_08_CORRECT', 'SCENT_08_RESPONSE',
+        'SCENT_09_CORRECT', 'SCENT_09_RESPONSE', 'SCENT_10_CORRECT',
+        'SCENT_10_RESPONSE', 'SCENT_11_CORRECT', 'SCENT_11_RESPONSE',
+        'SCENT_12_CORRECT', 'SCENT_12_RESPONSE', 'SCENT_13_CORRECT',
+        'SCENT_13_RESPONSE', 'SCENT_14_CORRECT', 'SCENT_14_RESPONSE',
+        'SCENT_15_CORRECT', 'SCENT_15_RESPONSE', 'SCENT_16_CORRECT',
+        'SCENT_16_RESPONSE', 'SCENT_17_CORRECT', 'SCENT_17_RESPONSE',
+        'SCENT_18_CORRECT', 'SCENT_18_RESPONSE', 'SCENT_19_CORRECT',
+        'SCENT_19_RESPONSE', 'SCENT_20_CORRECT', 'SCENT_20_RESPONSE',
+        'SCENT_21_CORRECT', 'SCENT_21_RESPONSE', 'SCENT_22_CORRECT',
+        'SCENT_22_RESPONSE', 'SCENT_23_CORRECT', 'SCENT_23_RESPONSE',
+        'SCENT_24_CORRECT', 'SCENT_24_RESPONSE', 'SCENT_25_CORRECT',
+        'SCENT_25_RESPONSE', 'SCENT_26_CORRECT', 'SCENT_26_RESPONSE',
+        'SCENT_27_CORRECT', 'SCENT_27_RESPONSE', 'SCENT_28_CORRECT',
+        'SCENT_28_RESPONSE', 'SCENT_29_CORRECT', 'SCENT_29_RESPONSE',
+        'SCENT_30_CORRECT', 'SCENT_30_RESPONSE', 'SCENT_31_CORRECT',
+        'SCENT_31_RESPONSE', 'SCENT_32_CORRECT', 'SCENT_32_RESPONSE',
+        'SCENT_33_CORRECT', 'SCENT_33_RESPONSE', 'SCENT_34_CORRECT',
+        'SCENT_34_RESPONSE', 'SCENT_35_CORRECT', 'SCENT_35_RESPONSE',
+        'SCENT_36_CORRECT', 'SCENT_36_RESPONSE', 'SCENT_37_CORRECT',
+        'SCENT_37_RESPONSE', 'SCENT_38_CORRECT', 'SCENT_38_RESPONSE',
+        'SCENT_39_CORRECT', 'SCENT_39_RESPONSE', 'SCENT_40_CORRECT',
+        'SCENT_40_RESPONSE', 'TOTAL_CORRECT'
+    ])
+
+    @property
+    def non_motor_features(self) -> List[str]:
+        """Additional non-motor assessments (normalized output column names)"""
+        return (self.moca_features + self.scopa_aut_features + self.ess_features 
+                + self.rbd_features + self.smell_features)
+
+
+    # Medication source column names
+    # Levodopa equivalent daily dose
+    ledd_features: List[str] = field(
+        default_factory=lambda: ['LEDTRT', 'STARTDT', 'STOPDT', 'LEDD'])
+    
+    # Vital signs
+    vital_signs_features: List[str] = field(
+        default_factory=lambda: ['SYSSUP', 'DIASUP', 'SYSSTND', 'DIASTND', 'HRSUP', 'HRSTND', 'WGTKG', 'HTCM'])  
+
+    # PD diagnosis history
+    pd_diagnosis_features: List[str] = field(default_factory=lambda: [
+        'PDDXDT', 'SXDT', 'DXTREMOR', 'DXRIGID', 'DXBRADY', 'DOMSIDE'
+    ])
+
+    @property
+    def medication_features(self) -> List[str]:
+        """Combined medication features (LEDD + vital signs + PD diagnosis)"""
+        return self.ledd_features + self.vital_signs_features + self.pd_diagnosis_features
+
+
+def calculate_mlp_dims(n_features: int, d_model: int = 256,
+                       min_hidden: int = 64, max_hidden: int = 256) -> List[int]:
+    """
+    Dynamically calculate MLP dimensions based on number of features.
+    
+    Strategy:
+    - Input dimension = n_features * 2 (values + missing masks)
+    - First hidden layer: scales with input size
+      * Small inputs (< 30): use min_hidden (64)
+      * Medium inputs (30-50): use 128
+      * Large inputs (> 50): use max_hidden (256) or 128
+    - Second hidden layer: always d_model for transformer compatibility
+    
+    Args:
+        n_features: Number of input features
+        d_model: Output embedding dimension (default: 256)
+        min_hidden: Minimum hidden layer size (default: 64)
+        max_hidden: Maximum hidden layer size (default: 256)
+    
+    Returns:
+        List of hidden layer dimensions [first_hidden, d_model]
+    
+    Examples:
+        >>> calculate_mlp_dims(14)  # Small modality
+        [64, 256]
+        >>> calculate_mlp_dims(33)  # Large modality
+        [128, 256]
+        >>> calculate_mlp_dims(50)  # Very large
+        [128, 256]
+    """
+    input_dim = n_features * 2  # values + masks
+
+    # Determine first hidden layer size
+    if input_dim < 30:
+        first_hidden = min_hidden  # 64
+    elif input_dim < 50:
+        first_hidden = 128
+    else:
+        # For very large inputs, use 128 or max_hidden
+        first_hidden = min(128, max_hidden)
+
+    return [first_hidden, d_model]
+
+
+@dataclass
+class ModelConfig:
+    """Configuration for V1 model architecture"""
+
+    # Embedding dimensions
+    d_model: int = 256
+
+    # Transformer architecture
+    n_heads: int = 8
+    n_layers: int = 4
+    dropout: float = 0.1
+    dim_feedforward: int = 1024
+    activation: str = 'gelu'
+
+    # Modality MLP dimensions
+    # Set to None to auto-calculate from feature counts, or provide explicit dimensions
+    # Auto-calculation uses: calculate_mlp_dims(n_features, d_model)
+    #   - Small inputs (<30): [64, 256]
+    #   - Medium inputs (30-50): [128, 256]  
+    #   - Large inputs (>50): [128, 256]
+    # 
+    # Example: To override auto-calculation for static features:
+    #   static_mlp_dims = [256, 512]  # Custom larger MLP
+    static_mlp_dims: Optional[List[int]] = None
+    part1_mlp_dims: Optional[List[int]] = None
+    part2_mlp_dims: Optional[List[int]] = None
+    part3_mlp_dims: Optional[List[int]] = None
+    part4_mlp_dims: Optional[List[int]] = None
+    med_mlp_dims: Optional[List[int]] = None
+    other_mlp_dims: Optional[List[int]] = None
+
+    # Internal reference to FeatureConfig (set by parent Config during initialization)
+    _feature_config: Optional['FeatureConfig_v2'] = None
+
+    def get_mlp_dims(self, feature_config: Optional['FeatureConfig_v2'] = None, modality: str = None) -> List[int]:
+        """
+        Get MLP dimensions for a modality, auto-calculating if not explicitly set.
+        
+        Uses self._feature_config (set by parent Config) as the source of truth.
+        feature_config parameter is optional for backward compatibility.
+        
+        Args:
+            feature_config: Optional FeatureConfig (deprecated - uses self._feature_config)
+            modality: One of 'static', 'part1', 'part2', 'part3', 'part4', 'med', 'other'
+        
+        Returns:
+            List of MLP hidden layer dimensions
+        """
+        # Use stored feature_config (from parent Config) as single source of truth
+        # feature_config parameter kept for backward compatibility only
+        if feature_config is None:
+            feature_config = self._feature_config
+
+        if feature_config is None:
+            raise ValueError("feature_config not available. Must be set in parent Config.")
+
+        if modality is None:
+            raise ValueError("modality parameter is required")
+
+        # Map modality names to config attributes and feature lists
+        modality_map = {
+            'static': ('static_mlp_dims', feature_config.static_features),
+            'part1': ('part1_mlp_dims', feature_config.part1_features),
+            'part2': ('part2_mlp_dims', feature_config.part2_features),
+            'part3': ('part3_mlp_dims', feature_config.part3_features),
+            'part4': ('part4_mlp_dims', feature_config.part4_features),
+            'med': ('med_mlp_dims', feature_config.medication_features),
+            'other': ('other_mlp_dims', feature_config.other_nonmotor_features),
+        }
+
+        if modality not in modality_map:
+            raise ValueError(f"Unknown modality: {modality}. Must be one of {list(modality_map.keys())}")
+
+        attr_name, feature_list = modality_map[modality]
+        explicit_dims = getattr(self, attr_name)
+
+        # If explicitly set, use it
+        if explicit_dims is not None:
+            return explicit_dims
+
+        # Otherwise, auto-calculate from feature count
+        n_features = len(feature_list)
+        return calculate_mlp_dims(n_features, self.d_model)
+
+    # Backward compatibility methods (no longer require feature_config)
+    def motor_mlp_dims(self, feature_config: Optional['FeatureConfig_v2'] = None) -> List[int]:
+        """Get motor MLP dims (uses part3)"""
+        # Uses self._feature_config (single source of truth) - feature_config param for backward compat
+        if self.part3_mlp_dims is not None:
+            return self.part3_mlp_dims
+        return self.get_mlp_dims(modality='part3')
+
+    def nonmotor_mlp_dims(self, feature_config: Optional['FeatureConfig_v2'] = None) -> List[int]:
+        """Get non-motor MLP dims (uses part1)"""
+        # Uses self._feature_config (single source of truth) - feature_config param for backward compat
+        if self.part1_mlp_dims is not None:
+            return self.part1_mlp_dims
+        return self.get_mlp_dims(modality='part1')
+
+    # Prediction targets
+    predict_totals: List[str] = field(default_factory=lambda: ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
+    # All UPDRS totals: NP1RTOT (non-motor), NP2PTOT (motor ADL), NP3TOT (motor exam), NP4TOT (complications)
+
+    # Prediction heads
+    next_visit_hidden_dims: List[int] = field(default_factory=lambda: [128, 64])
+    slope_hidden_dims: List[int] = field(default_factory=lambda: [128, 64])
+
+    # Time encoding
+    max_time_months: int = 120  # 10 years
+
+    # Sequence handling
+    max_seq_len: int = 20
+
+
+def get_device() -> str:
+    """Dynamically detect and return the best available device"""
+    if torch.cuda.is_available():
+        return 'cuda'
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        return 'mps'
+    else:
+        return 'cpu'
+
+
+@dataclass
+class TrainingConfig:
+    """Configuration for training"""
+
+    # Optimization
+    learning_rate: float = 1e-4
+    weight_decay: float = 1e-5
+    batch_size: int = 32
+    max_epochs: int = 100
+
+    # Loss weights
+    lambda_slope: float = 0.2  # Weight for slope prediction loss
+
+    # Early stopping
+    early_stopping_patience: int = 15
+
+    # Data
+    min_visits_for_slope: int = 3
+    train_split: float = 0.7
+    val_split: float = 0.15
+    test_split: float = 0.15
+
+    # Logging
+    log_every_n_steps: int = 10
+    validate_every_n_epochs: int = 1
+
+    # Device (automatically detected: 'cuda', 'mps' for Mac, or 'cpu')
+    device: str = field(default_factory=get_device)
+
+
+@dataclass
+class DataConfig_v2:
+    """Configuration for data paths"""
+
+    _repo_root = Path(__file__).parent.parent.parent.parent
+    base_dir: str = str(_repo_root / "ppmi_pd")
+
+    # Participant Status (master_df)
+    participant_status: str = "Participant_Status_14Dec2025.csv"
+
+    # Demographics files
+    demographics: str = "Subject_Demographics/Demographics_14Dec2025.csv"
+    family_history: str = "Family_History_14Dec2025.csv"
+    socio_economic: str = "Subject_Demographics/Socio-Economics_14Dec2025.csv"
+    age_at_visit: str = "Subject_Demographics/Age_at_Visit_14Dec2025.csv"
+
+    # Genetics files (relative to base_dir)
+    genetic_consensus: str = "Genetic_Status/iu_genetic_consensus_20251025_14Dec2025.csv"
+    prs_scores: str = "Genetic_Status/Polygenic_Risk_Scores_14Dec2025.csv"
+    prs_pcs: str = "Genetic_Status/PPMI_Project_9001_20250624_14Dec2025.csv"
+
+    # Motor clinical files
+    updrs_part2: str = "Motor___MDS-UPDRS/MDS_UPDRS_Part_II__Patient_Questionnaire_14Dec2025.csv"
+    updrs_part3: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_III_14Dec2025.csv"
+    updrs_part4: str = "Motor___MDS-UPDRS/MDS-UPDRS_Part_IV__Motor_Complications_14Dec2025.csv"
+    schwab_england: str = "Motor___MDS-UPDRS/Modified_Schwab___England_Activities_of_Daily_Living_14Dec2025.csv"
+    neuro_qol_lower: str = "Motor___MDS-UPDRS/Neuro_QoL__Lower_Extremity_Function__Mobility__-_Short_Form_14Dec2025.csv"
+    neuro_qol_upper: str = "Motor___MDS-UPDRS/Neuro_QoL__Upper_Extremity_Function_-_Short_Form_14Dec2025.csv"
+
+    # Non-motor clinical files
+    # Cognitive
+    moca: str = "Non-motor_Assessments/Montreal_Cognitive_Assessment__MoCA__14Dec2025.csv"
+    # Behavioral
+    scopa_aut: str = "Non-motor_Assessments/SCOPA-AUT_14Dec2025.csv"
+    # Sleep
+    ess: str = "Non-motor_Assessments/Epworth_Sleepiness_Scale_14Dec2025.csv"
+    rbd: str = "Non-motor_Assessments/REM_Sleep_Behavior_Disorder_Questionnaire_14Dec2025.csv"
+    # Smell
+    upsit: str = "Non-motor_Assessments/University_of_Pennsylvania_Smell_Identification_Test_UPSIT_14Dec2025.csv"
+    
+    # Medication files
+    ledd: str = "Medical_History/LEDD_Concomitant_Medication_Log_14Dec2025.csv"
+    vital_signs: str = "Medical_History/Vital_Signs_14Dec2025.csv"
+    pd_diagnosis: str = "Medical_History/PD_Diagnosis_History_14Dec2025.csv"
+
+    # Output paths (relative to V1_implementation directory)
+    processed_data_dir: str = "data/processed"
+    model_save_dir: str = "models/checkpoints"
+    results_dir: str = "results"
+
+
+@dataclass
+class Config_v2:
+    """Complete configuration object for V1 model"""
+    features: FeatureConfig_v2
+    model: ModelConfig
+    training: TrainingConfig
+    data: DataConfig_v2
+    # When True, loaders and utilities should raise on missing/critical errors
+    # (useful during development / CI). When False, loaders may return empty
+    # DataFrames for optional files and log errors instead of raising.
+    raise_on_error: bool = True
+
+    def __post_init__(self):
+        """Validate configuration after initialization and set up internal references"""
+        # Set feature_config reference in model_config so it can access features without passing config around
+        self.model._feature_config = self.features
+        # Ensure MLP dimensions are compatible
+        # Make flag visible via model/training if needed in runtime
+        try:
+            # Attach flag to training for backward compatibility checks
+            setattr(self.training, 'raise_on_error', self.raise_on_error)
+        except Exception:
+            # Non-fatal: only a convenience mapping
+            pass
+
+
+# Create default configs
+def get_default_config() -> Config_v2:
+    """Get default configuration for V1 model"""
+    return Config_v2(
+        features=FeatureConfig_v2(),
+        model=ModelConfig(),
+        training=TrainingConfig(),
+        data=DataConfig_v2()
+    )
+
+
+if __name__ == "__main__":
+    # Print configuration
+    config = get_default_config()
+
+    print("=" * 80)
+    print("V1 Model Configuration")
+    print("=" * 80)
+
+    print("\n--- Feature Configuration ---")
+    print(f"Static features: {len(config.features.static_features)}")
+    print(f"Longitudinal features: ")
+    print(f"Part II (motor ADL): {len(config.features.part2_features)}")
+    print(f"Part III (motor exam): {len(config.features.part3_features)}")
+    print(f"Part IV (complications): {len(config.features.part4_features)}")
+    print(f"Schwab and England Score: {len(config.features.schwab_england_features)}")
+    print(f"Neuro QoL Lower Extremity: {len(config.features.neuro_qol_lower_features)}")
+    print(f"Neuro QoL Upper Extremity: {len(config.features.neuro_qol_upper_features)}")
+    print(f"Overall Motor Severity Score (Part II - IV): {', '.join(config.features.overall_motor_severity_score)}")
+    print(f"Moca features: {len(config.features.moca_features)}")
+    print(f"SCOPA-AUT features: {len(config.features.scopa_aut_features)}")
+    print(f"ESS features: {len(config.features.ess_features)}")
+    print(f"RBD features: {len(config.features.rbd_features)}")
+    print(f"Smell features: {len(config.features.smell_features)}")
+    print(f"Medication features: {len(config.features.medication_features)}")
+
+
+    print("\n--- Model Configuration ---")
+    print(f"d_model: {config.model.d_model}")
+    print(f"n_heads: {config.model.n_heads}")
+    print(f"n_layers: {config.model.n_layers}")
+    print(f"max_seq_len: {config.model.max_seq_len}")
+
+    print("\n--- MLP Dimensions (Auto-calculated) ---")
+    modality_map = {
+        'static': 'static_features',
+        'part2': 'part2_features',
+        'part3': 'part3_features',
+        'part4': 'part4_features',
+        'schawab_england': 'schwab_england_features',
+        'neuro_qol_lower': 'neuro_qol_lower_features',
+        'neuro_qol_upper': 'neuro_qol_upper_features',
+        'moca': 'moca_features',
+        'scopa_aut': 'scopa_aut_features',
+        'ess': 'ess_features',
+        'rbd': 'rbd_features',
+        'smell': 'smell_features',
+        'med': 'medication_features'
+    }
+
+    for mod, attr_name in modality_map.items():
+        n_features = len(getattr(config.features, attr_name))
+        mlp_dims = config.model.get_mlp_dims(modality=mod)
+        print(f"{mod:8s}: {n_features:3d} features → {mlp_dims}")
+
+    print("\n--- Training Configuration ---")
+    print(f"batch_size: {config.training.batch_size}")
+    print(f"learning_rate: {config.training.learning_rate}")
+    print(f"lambda_slope: {config.training.lambda_slope}")
+    print(f"max_epochs: {config.training.max_epochs}")

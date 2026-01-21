@@ -630,7 +630,7 @@ class DataIntegrator:
             patient_groups = list(longitudinal_df.groupby('PATNO'))
             print(f"    Processing longitudinal data for {len(patient_groups)} patients...")
             for i, (patno, group) in enumerate(patient_groups):
-                if (i + 1) % 2000 == 0:
+                if (i + 1) % 200 == 0:
                     print(f"    Processing longitudinal data: {i + 1}/{len(patient_groups)} patients...")
                 # Sort by time (months_since_baseline or EVENT_ID order)
                 if 'months_since_baseline' in group.columns:

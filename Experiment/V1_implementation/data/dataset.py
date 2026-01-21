@@ -528,8 +528,21 @@ def create_kfold_dataloaders(
     print("\n--- Creating Test Loader ---")
     test_integrator = DataIntegrator(config, normalize_features=True)
     test_integrator.fit_scalers(prepared_data, train_patnos=cv_ids)  # Fit on CV data
-    print("  [DEBUG] Scalers fitted. Starting create_feature_vectors...")
-    test_feature_vectors = test_integrator.create_feature_vectors(prepared_data)
+    print("  [DEBUG] Scalers fitted. Filtering to test patients only...")
+    
+    # OPTIMIZATION: Filter to only test patients - no need to process all patients
+    test_prepared_data = {
+        'static': prepared_data['static'][prepared_data['static']['PATNO'].isin(test_ids)].copy(),
+        'longitudinal': prepared_data['longitudinal'][prepared_data['longitudinal']['PATNO'].isin(test_ids)].copy(),
+    }
+    # Handle slopes DataFrame
+    if 'slopes' in prepared_data and not prepared_data['slopes'].empty:
+        test_prepared_data['slopes'] = prepared_data['slopes'][prepared_data['slopes']['PATNO'].isin(test_ids)].copy()
+    else:
+        test_prepared_data['slopes'] = prepared_data.get('slopes', pd.DataFrame())
+    
+    print("  [DEBUG] Starting create_feature_vectors (test patients only)...")
+    test_feature_vectors = test_integrator.create_feature_vectors(test_prepared_data)
     print("  [DEBUG] create_feature_vectors completed.")
     
     test_static_data = test_feature_vectors['static_data']
@@ -566,18 +579,34 @@ def create_kfold_dataloaders(
         # Get patient IDs for this fold
         fold_train_ids = [cv_ids[i] for i in train_indices]
         fold_val_ids = [cv_ids[i] for i in val_indices]
+        fold_all_ids = set(fold_train_ids + fold_val_ids)
         
         print(f"  Train: {len(fold_train_ids)} patients")
         print(f"  Val: {len(fold_val_ids)} patients")
         
+        # OPTIMIZATION: Filter prepared_data to only patients in this fold
+        # This avoids processing all patients when we only need train+val subset
+        fold_prepared_data = {
+            'static': prepared_data['static'][prepared_data['static']['PATNO'].isin(fold_all_ids)].copy(),
+            'longitudinal': prepared_data['longitudinal'][prepared_data['longitudinal']['PATNO'].isin(fold_all_ids)].copy(),
+        }
+        # Handle slopes DataFrame (might be empty or not exist)
+        if 'slopes' in prepared_data and not prepared_data['slopes'].empty:
+            fold_prepared_data['slopes'] = prepared_data['slopes'][prepared_data['slopes']['PATNO'].isin(fold_all_ids)].copy()
+        else:
+            fold_prepared_data['slopes'] = prepared_data.get('slopes', pd.DataFrame())
+        
+        print(f"  [DEBUG] Filtered to {len(fold_prepared_data['static'])} static rows, {len(fold_prepared_data['longitudinal'])} longitudinal rows")
+        
         # Create integrator for this fold
         # IMPORTANT: Fit scalers on training fold only
         fold_integrator = DataIntegrator(config, normalize_features=True)
-        fold_integrator.fit_scalers(prepared_data, train_patnos=fold_train_ids)
-        print(f"  [DEBUG] Fold {fold_idx + 1}: Creating feature vectors...")
+        fold_integrator.fit_scalers(fold_prepared_data, train_patnos=fold_train_ids)
+        print(f"  [DEBUG] Fold {fold_idx + 1}: Creating feature vectors (filtered data)...")
         
         # Create feature vectors (will use scalers fitted on training fold)
-        fold_feature_vectors = fold_integrator.create_feature_vectors(prepared_data)
+        # Now only processes fold patients instead of all patients - much faster!
+        fold_feature_vectors = fold_integrator.create_feature_vectors(fold_prepared_data)
         print(f"  [DEBUG] Fold {fold_idx + 1}: Feature vectors created.")
         
         fold_static_data = fold_feature_vectors['static_data']

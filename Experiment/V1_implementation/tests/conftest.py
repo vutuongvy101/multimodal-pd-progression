@@ -27,18 +27,30 @@ def test_config():
     from training.config import get_default_config
     return get_default_config()
 
+@pytest.fixture
+def test_config_v2():
+    """Get default configuration v2 for testing"""
+    from training.config_v2 import get_default_config
+    return get_default_config()
 
 @pytest.fixture
 def mock_base_dir(tmp_path):
     """Create a temporary directory for testing data paths"""
     return str(tmp_path / "test_data")
 
-
 @pytest.fixture
 def skip_if_no_data(test_config):
     """Skip test if data files are not available"""
     import os
     base_dir = test_config.data.base_dir
+    if not os.path.exists(base_dir):
+        pytest.skip(f"Data directory not found: {base_dir}")
+
+@pytest.fixture
+def skip_if_no_data(test_config_v2):
+    """Skip test if data files are not available"""
+    import os
+    base_dir = test_config_v2.data.base_dir
     if not os.path.exists(base_dir):
         pytest.skip(f"Data directory not found: {base_dir}")
 

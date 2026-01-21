@@ -164,6 +164,11 @@ class FeatureConfig_v2:
     # MoCA (Montreal Cognitive Assessment)
     moca_features: List[str] = field(default_factory=lambda: ['MCATOT'])
 
+    @property
+    def cognitive_features(self) -> List[str]:
+        """Combined cognitive features (currently only MoCA)"""
+        return self.moca_features
+
     # Behavioral 
     # SCOPA-AUT (SCales for Outcomes in PArkinson’s disease - Autonomic)
     scopa_aut_features: List[str] = field(default_factory=lambda: [
@@ -171,6 +176,11 @@ class FeatureConfig_v2:
         'SCAU11', 'SCAU12', 'SCAU13', 'SCAU14', 'SCAU15', 'SCAU16', 'SCAU17', 'SCAU18', 'SCAU19', 'SCAU20',
         'SCAU21', 'SCAU22', 'SCAU23', 'SCAU24', 'SCAU25'
     ])
+
+    @property
+    def behavioral_features(self) -> List[str]:
+        """Combined behavioral features (currently only SCOPA-AUT)"""
+        return self.scopa_aut_features
 
     # Sleep 
     # ESS (Epworth Sleepiness Scale)
@@ -184,9 +194,14 @@ class FeatureConfig_v2:
         'HETRA', 'PARKISM', 'RLS', 'NARCLPSY', 'DEPRS', 'EPILEPSY', 'BRNINFM'
     ])
 
+    @property
+    def sleep_features(self) -> List[str]:
+        """Combined sleep features (ESS + RBD)"""
+        return self.ess_features + self.rbd_features
+
     # Smell 
     # UPSIT (University of Pennsylvania Smell Identification Test)
-    smell_features: List[str] = field(default_factory=lambda: [
+    upsit_features: List[str] = field(default_factory=lambda: [
         'SCENT_01_CORRECT',
         'SCENT_01_RESPONSE', 'SCENT_02_CORRECT', 'SCENT_02_RESPONSE',
         'SCENT_03_CORRECT', 'SCENT_03_RESPONSE', 'SCENT_04_CORRECT',
@@ -218,10 +233,9 @@ class FeatureConfig_v2:
     ])
 
     @property
-    def non_motor_features(self) -> List[str]:
-        """Additional non-motor assessments (normalized output column names)"""
-        return (self.moca_features + self.scopa_aut_features + self.ess_features 
-                + self.rbd_features + self.smell_features)
+    def smell_features(self) -> List[str]:
+        """Combined smell features (currently only UPSIT)"""
+        return self.upsit_features
 
 
     # Medication source column names

@@ -1,6 +1,6 @@
 """
-Task 3: UPDRS Data Loader
-Load all four UPDRS parts (I, II, III, IV)
+Task 3: Motor Data Loader
+Load all four Motor parts (II, III, IV)
 """
 
 import pandas as pd
@@ -10,14 +10,13 @@ import traceback
 from typing import List, Dict
 
 from ..base_loader import LongitudinalDataLoader
-from training.config_v2 import DataConfig_v2
+from training.config_v2 import Config_v2
 
 _LOG = logging.getLogger(__name__)
 
-# TODO: Rename this file to updrs_loader_v2.py and the class accordingly
 class MotorLoader(LongitudinalDataLoader):
     """
-    Loads all UPDRS parts and supplementary motor assessments:
+    Loads motor parts and supplementary motor assessments:
     
     Core UPDRS:
     - Part II: Motor ADL (NP2*)
@@ -34,11 +33,11 @@ class MotorLoader(LongitudinalDataLoader):
     - All core UPDRS features + supplementary features
     """
     
-    def __init__(self, base_dir: str, config: DataConfig_v2, valid_participants=None):
+    def __init__(self, base_dir: str, config: Config_v2, valid_participants=None):
         """
         Args:
             base_dir: Base directory for data files
-            config: Configuration dict with file paths
+            config: Full Config_v2 object with features and data paths
             valid_participants: Optional pre-filtered participant DataFrame (shared across loaders)
         """
         super().__init__(base_dir, config, valid_participants=valid_participants)
@@ -127,20 +126,6 @@ class MotorLoader(LongitudinalDataLoader):
         print("Loading UPDRS and supplementary motor assessment data...")
         
         # Core UPDRS Parts
-        part1_ques_df = self.__load_data_file__(
-            'updrs_part1_ques',
-            self.config.features.part1_questionnaire_features,
-            'Part I Questionnaire (NP1 questions)',
-            required=True
-        )
-        
-        part1_df = self.__load_data_file__(
-            'updrs_part1',
-            self.config.features.part1_updrs_features,
-            'Part I (NP1 UPDRS)',
-            required=True
-        )
-        
         part2_df = self.__load_data_file__(
             'updrs_part2',
             self.config.features.part2_features,
@@ -184,18 +169,11 @@ class MotorLoader(LongitudinalDataLoader):
             required=False
         )
         
-        participant_motor_df = self.__load_data_file__(
-            'participant_motor',
-            self.config.features.participant_motor_features,
-            'Participant Motor Function Questionnaire',
-            required=False
-        )
-        
         # Merge all files together on [PATNO, EVENT_ID]
         updrs_df = None
         all_dfs = [
-            part1_ques_df, part1_df, part2_df, part3_df, part4_df,
-            schwab_df, neuro_qol_lower_df, neuro_qol_upper_df, participant_motor_df
+            part2_df, part3_df, part4_df,
+            schwab_df, neuro_qol_lower_df, neuro_qol_upper_df
         ]
         
         for df in all_dfs:
@@ -223,7 +201,7 @@ class MotorLoader(LongitudinalDataLoader):
         """Required columns in output"""
         return [
             'PATNO', 'EVENT_ID', 'months_since_baseline',
-            'NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT'  # At minimum, the totals
+            'NP2TOT', 'NP3TOT', 'NP4TOT'  # At minimum, the totals
         ]
     
     def validate(self, df: pd.DataFrame) -> bool:
@@ -233,9 +211,9 @@ class MotorLoader(LongitudinalDataLoader):
             raise ValueError("Missing PATNO or EVENT_ID columns")
         
         # Check for at least one UPDRS total
-        totals = [c for c in df.columns if c in self.config.features.all_updrs_totals]
+        totals = [c for c in df.columns if c in self.config.features.overall_motor_severity_score]
         if len(totals) == 0:
-            raise ValueError("No UPDRS total scores found")
+            raise ValueError("No Overall Motor Severity Score found")
         
         # Check time computation
         if 'months_since_baseline' not in df.columns:
@@ -248,7 +226,6 @@ class MotorLoader(LongitudinalDataLoader):
                     print(f"⚠️  Warning: Time range looks unusual: {time_range.min():.1f} - {time_range.max():.1f} months")
         
         print(f"✓ Validation passed: {len(df)} visits across {df['PATNO'].nunique()} patients")
-        print(f"  Available UPDRS totals: {', '.join(totals)}")
+        print(f"  Available Overall Motor Severity Scores: {', '.join(totals)}")
         
         return True
-

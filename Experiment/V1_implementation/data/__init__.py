@@ -2,8 +2,10 @@
 Data preparation and loading
 """
 
-from .base_loader import BaseDataLoader, StaticDataLoader, LongitudinalDataLoader
-from .data_integrator import DataIntegrator
+# from .base_loader import BaseDataLoader, StaticDataLoader, LongitudinalDataLoader
+# from .data_integrator import DataIntegrator
+from .base_loader_v2 import BaseDataLoader, StaticDataLoader, LongitudinalDataLoader
+from .data_integrator_v2 import DataIntegrator
 from .dataset import PPMILongitudinalDataset, collate_fn, create_dataloaders, create_kfold_dataloaders
 from .visit_index_builder import VisitIndexBuilder
 

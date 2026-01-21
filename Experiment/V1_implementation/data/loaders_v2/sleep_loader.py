@@ -1,6 +1,8 @@
 """
-Task 4: Non-Motor Assessments Loader
-Load additional non-motor assessments (MoCA, sleep, autonomic, QoL)
+Task 4: Sleep Loader
+Load sleep assessments
+- ESS (Epworth Sleepiness Scale)
+- RBD (REM Sleep Behavior Disorder)
 """
 
 import os
@@ -17,10 +19,9 @@ _log = logging.getLogger(__name__)
 
 class SleepLoader(LongitudinalDataLoader):
     """
-    Loads non-UPDRS non-motor assessments:
-    - MoCA (cognitive)
-    - ESS (sleep)
-    - SCOPA-AUT (autonomic)
+    Loads sleep assessments:
+    - ESS (Epworth Sleepiness Scale)
+    - RBD (REM Sleep Behavior Disorder)
     """
     
     def __init__(self, base_dir: str, config: DataConfig_v2, valid_participants=None):
@@ -35,7 +36,7 @@ class SleepLoader(LongitudinalDataLoader):
         
     def __load_data_file__(self, file_path_config: str, feature_list: List[str], file_name: str, required: bool = False) -> pd.DataFrame:
         """
-        Generic loader for non-motor assessment CSVs. Returns empty DataFrame on failure.
+        Generic loader for sleep assessment CSVs. Returns empty DataFrame on failure.
         """
         import logging
         _log = logging.getLogger(__name__)
@@ -81,57 +82,49 @@ class SleepLoader(LongitudinalDataLoader):
             if required:
                 raise
             return pd.DataFrame()
+        
     def _load_raw(self) -> pd.DataFrame:
         """
-        Load non-motor assessments and merge them
+        Load sleep assessments and merge them
         
         Returns:
-            DataFrame with PATNO, EVENT_ID, months_since_baseline, and non-motor scores
+            DataFrame with PATNO, EVENT_ID, months_since_baseline, and sleep scores
         """
-        non_motor_dfs = []
-
-        moca_df = self.__load_data_file__('moca', self.config.features.moca_features, 'MoCA (cognitive)', required=False)
-        if len(moca_df) > 0:
-            non_motor_dfs.append(('MoCA', moca_df))
+        sleep_dfs = []
 
         ess_df = self.__load_data_file__('ess', self.config.features.ess_features, 'ESS (Epworth Sleepiness Scale)', required=False)
         if len(ess_df) > 0:
-            non_motor_dfs.append(('ESS', ess_df))
+            sleep_dfs.append(('ESS', ess_df))
 
-        scopa_df = self.__load_data_file__('scopa_aut', self.config.features.scopa_aut_features, 'SCOPA-AUT (autonomic)', required=False)
-        if len(scopa_df) > 0:
-            non_motor_dfs.append(('SCOPA-AUT', scopa_df))
+        rbd_df = self.__load_data_file__('rbd', self.config.features.rbd_features, 'RBD (REM Sleep Behavior Disorder)', required=False)
+        if len(rbd_df) > 0:
+            sleep_dfs.append(('RBD', rbd_df))
 
-        se_df = self.__load_data_file__('schwab_england', self.config.features.schwab_england_features, 'Schwab & England (ADL)', required=False)
-        if len(se_df) > 0:
-            non_motor_dfs.append(('Schwab & England', se_df))
+        if len(sleep_dfs) == 0:
+            raise ValueError("Could not load any sleep assessments")
 
-        if len(non_motor_dfs) == 0:
-            raise ValueError("Could not load any non-motor assessments")
-
-        non_motor_df = None
-        for name, df in non_motor_dfs:
-            if non_motor_df is None:
-                non_motor_df = df
+        sleep_df = None
+        for name, df in sleep_dfs:
+            if sleep_df is None:
+                sleep_df = df
             else:
-                non_motor_df = non_motor_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
-                non_motor_df = non_motor_df.loc[:, ~non_motor_df.columns.str.endswith('_dup')]
-
-        print(f"✓ Merged non-motor data: {len(non_motor_df)} visits, {len(non_motor_df.columns)-3} features")
-        return non_motor_df
+                sleep_df = sleep_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
+                sleep_df = sleep_df.loc[:, ~sleep_df.columns.str.endswith('_dup')]
+        print(f"✓ Merged sleep data: {len(sleep_dfs)} visits, {len(sleep_df.columns)-3} features")
+        return sleep_df
 
     def get_required_columns(self) -> List[str]:
-        """Return list of required columns for non-motor assessments."""
-        return ['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.non_motor_features
+        """Return list of required columns for sleep assessments."""
+        return ['PATNO', 'EVENT_ID', 'INFODT'] + self.config.features.sleep_features
 
     def validate(self, df: pd.DataFrame) -> bool:
-        """Validate non-motor DataFrame has required columns and at least one non-motor feature."""
+        """Validate sleep DataFrame has required columns and at least one sleep feature."""
         if df is None or len(df) == 0:
-            raise ValueError("Non-motor DataFrame is empty or None")
+            raise ValueError("Sleep DataFrame is empty or None")
 
-        non_motor_cols = [c for c in df.columns if c in self.config.features.non_motor_features]
-        if len(non_motor_cols) == 0:
-            raise ValueError("No non-motor assessment columns found")
+        sleep_cols = [c for c in df.columns if c in self.config.features.sleep_features]
+        if len(sleep_cols) == 0:
+            raise ValueError("No sleep assessment columns found")
 
         required_cols = self.get_required_columns()
         missing_cols = set(required_cols) - set(df.columns.to_list())
@@ -143,5 +136,5 @@ class SleepLoader(LongitudinalDataLoader):
             _log.warning(f"Extra columns found (not required): {sorted(extra_cols)}")
 
         _log.info(f"✓ Validation passed: {len(df)} visits across {df['PATNO'].nunique()} patients")
-        _log.info(f"  Available assessments: {', '.join(non_motor_cols)}")
+        _log.info(f"  Available assessments: {', '.join(sleep_cols)}")
         return True

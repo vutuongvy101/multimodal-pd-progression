@@ -571,24 +571,28 @@ class DataIntegrator:
         # Static Features 
         static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
         
-        # Create per-patient static data
+        # Optimized: Process all static features at once (vectorized)
+        # Ensure one row per patient (take first if duplicates exist)
+        static_df_unique = static_df.drop_duplicates(subset='PATNO', keep='first')
+        patient_list = static_df_unique['PATNO'].values
+        
+        print(f"    Processing static features for {len(patient_list)} patients (vectorized)...")
+        # Get feature columns (exclude PATNO)
+        feature_cols = [c for c in static_cols if c != 'PATNO']
+        
+        # Process all patients at once - much faster!
+        all_values, all_masks = self.create_missingness_masks(
+            static_df_unique,
+            feature_cols,
+            scaler=self.static_scaler
+        )
+        
+        # Split into per-patient dictionaries
         static_data = {}
-        patient_list = static_df['PATNO'].unique()
         for i, patno in enumerate(patient_list):
-            if (i + 1) % 2000 == 0:
-                print(f"    Processing static features: {i + 1}/{len(patient_list)} patients...")
-            patient_row = static_df[static_df['PATNO'] == patno].iloc[0]
-            # Get feature columns (exclude PATNO)
-            feature_cols = [c for c in static_cols if c != 'PATNO']
-            values, mask = self.create_missingness_masks(
-                pd.DataFrame([patient_row]), 
-                feature_cols,
-                scaler=self.static_scaler
-            )
-            
             static_data[patno] = {
-                'values': values[0],  # Remove batch dimension
-                'mask': mask[0]
+                'values': all_values[i],
+                'mask': all_masks[i]
             }
         
         # Longitudinal Features
@@ -617,8 +621,14 @@ class DataIntegrator:
             non_motor_cols = [c for c in non_motor_features if c in longitudinal_df.columns]
             med_cols = [c for c in medication_features if c in longitudinal_df.columns]
             
+            # Pre-compute event order mapping (used for sorting visits)
+            event_order = {'SC': 0, 'BL': 0}
+            for i in range(1, 26):
+                event_order[f'V{i:02d}'] = i
+            
             # Group by patient
             patient_groups = list(longitudinal_df.groupby('PATNO'))
+            print(f"    Processing longitudinal data for {len(patient_groups)} patients...")
             for i, (patno, group) in enumerate(patient_groups):
                 if (i + 1) % 2000 == 0:
                     print(f"    Processing longitudinal data: {i + 1}/{len(patient_groups)} patients...")
@@ -626,12 +636,8 @@ class DataIntegrator:
                 if 'months_since_baseline' in group.columns:
                     group = group.sort_values('months_since_baseline')
                 elif 'EVENT_ID' in group.columns:
-                    # Sort by visit order
-                    # SC and BL are both baseline (order 0), then V01-V25 are visits 1-25
-                    event_order = {'SC': 0, 'BL': 0}
-                    # Dynamically generate V01 through V25
-                    for i in range(1, 26):
-                        event_order[f'V{i:02d}'] = i
+                    # Sort by visit order using pre-computed mapping
+                    group = group.copy()
                     group['_visit_order'] = group['EVENT_ID'].map(lambda x: event_order.get(x, 999))
                     group = group.sort_values('_visit_order').drop(columns=['_visit_order'])
                 
@@ -720,29 +726,34 @@ class DataIntegrator:
             print("WARNING: No longitudinal data available")
         
         # Slopes - extract all UPDRS total slopes for each patient
+        # Optimized: Use vectorized operations instead of row-by-row iteration
         slopes = {}
         all_patnos = list(static_data.keys())
+        all_updrs_totals = self.config.features.all_updrs_totals
         
         # Initialize all patients with NaN for all slopes
         for patno in all_patnos:
             slopes[patno] = {
                 f'{total}_slope': float('nan')
-                for total in self.config.features.all_updrs_totals
+                for total in all_updrs_totals
             }
         
-        # Fill in computed slopes from slopes_df
+        # Fill in computed slopes from slopes_df (optimized: filter first, then iterate)
         if not slopes_df.empty:
-            for _, row in slopes_df.iterrows():
+            # Filter to only patients we care about (reduces iteration)
+            slopes_df_filtered = slopes_df[slopes_df['PATNO'].isin(all_patnos)]
+            
+            # Process slopes - iterate once through filtered dataframe
+            for _, row in slopes_df_filtered.iterrows():
                 patno = row['PATNO']
                 if patno not in slopes:
                     continue
                 
                 # Extract slope for each UPDRS total
-                for total in self.config.features.all_updrs_totals:
+                for total in all_updrs_totals:
                     slope_col = f'{total}_slope'
                     if slope_col in row and pd.notna(row[slope_col]):
                         slopes[patno][slope_col] = float(row[slope_col])
-                    # else keep NaN (already initialized)
         
         return {
             'static_data': static_data,

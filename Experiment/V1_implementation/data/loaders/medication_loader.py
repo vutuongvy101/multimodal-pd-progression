@@ -30,9 +30,15 @@ class MedicationLoader(LongitudinalDataLoader):
         super().__init__(base_dir, config, valid_participants=valid_participants)
         # config is now stored in base class as self.config - no need to store again
         
-    def __load_data_file__(self, file_path_config: str, feature_list: List[str], file_name: str) -> pd.DataFrame:
+    def __load_data_file__(self, file_path_config: str, feature_list: List[str], file_name: str, require_infodt: bool = False) -> pd.DataFrame:
         """
         Generic loader for longitudinal files used by MedicationLoader.
+        
+        Args:
+            file_path_config: Config attribute name (e.g., 'ledd', 'vital_signs')
+            feature_list: List of features to extract from file
+            file_name: Display name for logging
+            require_infodt: Whether INFODT is required (default False, since vital_signs doesn't have it)
         """
         import logging
         _log = logging.getLogger(__name__)
@@ -51,16 +57,27 @@ class MedicationLoader(LongitudinalDataLoader):
 
             _log.info(f"Loading {file_name} from: {resolved}")
             df = pd.read_csv(resolved, low_memory=False)
-            required_cols = ['PATNO', 'EVENT_ID', 'INFODT']
-            available = [c for c in feature_list if c in df.columns]
-
+            
+            # Check required columns
             for rc in ['PATNO', 'EVENT_ID']:
                 if rc not in df.columns:
                     msg = f"Required column '{rc}' missing in {file_name}: {resolved}"
                     _log.error(msg)
                     return pd.DataFrame()
 
-            cols = required_cols + available
+            # Extract available features
+            available = [c for c in feature_list if c in df.columns]
+            
+            # Build column list: always include PATNO, EVENT_ID
+            cols = ['PATNO', 'EVENT_ID']
+            
+            # Add INFODT if available (not required)
+            if 'INFODT' in df.columns:
+                cols.append('INFODT')
+            
+            # Add available features
+            cols.extend(available)
+            
             return df[cols].copy()
         except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
             _log.exception(f"Could not parse {file_name}: {e}")
@@ -70,52 +87,64 @@ class MedicationLoader(LongitudinalDataLoader):
             return pd.DataFrame()
     def _load_raw(self) -> pd.DataFrame:
         """
-        Load medication data
+        Load medication data from three separate sources:
+        - LEDD (Levodopa Equivalent Daily Dose)
+        - Vital Signs
+        - PD Diagnosis History
+        
+        These are merged on PATNO and EVENT_ID.
+        INFODT is only available in some files and is optional.
         
         Returns:
             DataFrame with PATNO, EVENT_ID, months_since_baseline, and medication features
         """
         med_dfs = []
-
-        # Try to load a medication file defined in config first
-        med_from_config = self.__load_data_file__('medication', self.config.features.medication_features, 'Medication (config)')
-        if len(med_from_config) > 0:
-            med_dfs.append(med_from_config)
-
-        # If not found via config, try common filenames (legacy)
-        if len(med_dfs) == 0:
-            possible_files = [
-                'Use_of_PD_Medication.csv',
-                'PD_Medications.csv',
-                'Concomitant_Medications.csv'
-            ]
-            for fname in possible_files:
-                try:
-                    path = self.resolve_path(fname)
-                    if os.path.exists(path):
-                        print(f"  Loading medication from: {path}")
-                        df = pd.read_csv(path, low_memory=False)
-                        # pick columns
-                        req = ['PATNO', 'EVENT_ID', 'INFODT']
-                        led_col = next((c for c in self.config.features.ledd_features if c in df.columns), None)
-                        pdcol = next((c for c in self.config.features.pdmedyn_features if c in df.columns), None)
-                        cols = req + [c for c in [led_col, pdcol] if c]
-                        med_dfs.append(df[cols].copy())
-                        print(f"    ✓ Loaded {len(df)} rows from {fname}")
-                        break
-                except Exception:
-                    continue
-
+        
+        # Load LEDD data
+        ledd_df = self.__load_data_file__(
+            'ledd', 
+            self.config.features.ledd_features, 
+            'LEDD',
+            require_infodt=False
+        )
+        if len(ledd_df) > 0:
+            med_dfs.append(ledd_df)
+            print(f"  ✓ Loaded LEDD: {len(ledd_df)} rows")
+        
+        # Load Vital Signs data (no INFODT in this file)
+        vital_df = self.__load_data_file__(
+            'vital_signs',
+            self.config.features.vital_signs_features,
+            'Vital Signs',
+            require_infodt=False
+        )
+        if len(vital_df) > 0:
+            med_dfs.append(vital_df)
+            print(f"  ✓ Loaded Vital Signs: {len(vital_df)} rows")
+        
+        # Load PD Diagnosis data
+        pd_diag_df = self.__load_data_file__(
+            'pd_diagnosis',
+            self.config.features.pd_diagnosis_features,
+            'PD Diagnosis',
+            require_infodt=False
+        )
+        if len(pd_diag_df) > 0:
+            med_dfs.append(pd_diag_df)
+            print(f"  ✓ Loaded PD Diagnosis: {len(pd_diag_df)} rows")
+        
         if len(med_dfs) == 0:
             print("  ⚠️  No medication files found. Creating empty medication dataframe.")
             return pd.DataFrame(columns=['PATNO', 'EVENT_ID', 'months_since_baseline'])
-
+        
+        # Merge all medication dataframes on PATNO and EVENT_ID
         med_df = med_dfs[0]
         for df in med_dfs[1:]:
             med_df = med_df.merge(df, on=['PATNO', 'EVENT_ID'], how='outer', suffixes=('', '_dup'))
+            # Remove duplicate columns
             med_df = med_df.loc[:, ~med_df.columns.str.endswith('_dup')]
-
-        print(f"✓ Medication data: {len(med_df)} visits, {len(med_df.columns)-3} features")
+        
+        print(f"✓ Medication data: {len(med_df)} visits, {len(med_df.columns)-2} features (after merge)")
         return med_df
     
     def get_required_columns(self) -> List[str]:

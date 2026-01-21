@@ -130,6 +130,8 @@ class FeatureConfig:
         # Tremor
         'NP3KTRMR', 'NP3KTRML', 'NP3RTARU', 'NP3RTALU', 'NP3RTARL',
         'NP3RTALL','NP3RTALJ', 'NP3RTCON',
+        # Hoehn & Yahr Stage
+        'NHY',
         'NP3TOT'  # Part III total
     ])
 
@@ -192,7 +194,7 @@ class FeatureConfig:
         return ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']
 
 
-    # Non-motor assessment source column names
+    # Clinical assessment source column names
     # Cognitive
     moca_features: List[str] = field(default_factory=lambda: ['MCATOT'])
     # Sleep (Epworth Sleepiness Scale)
@@ -251,6 +253,14 @@ def calculate_mlp_dims(n_features: int, d_model: int = 256,
     
     Returns:
         List of hidden layer dimensions [first_hidden, d_model]
+    
+    Examples:
+        >>> calculate_mlp_dims(14)  # Small modality
+        [64, 256]
+        >>> calculate_mlp_dims(33)  # Large modality
+        [128, 256]
+        >>> calculate_mlp_dims(50)  # Very large
+        [128, 256]
     """
     input_dim = n_features * 2  # values + masks
 
@@ -278,14 +288,7 @@ class ModelConfig:
     n_layers: int = 4
     dropout: float = 0.1
     dim_feedforward: int = 1024
-    activation: str = 'gelu' # this is told better than RELU in Transformer
-
-    # Modality selection: which modalities to include in the model
-    # Options: 'static', 'motor', 'nonmotor', 'medication'
-    # This enables ablation studies and modality-specific experiments
-    enabled_modalities: List[str] = field(default_factory=lambda: [
-        'static', 'motor', 'nonmotor', 'medication'
-    ])
+    activation: str = 'gelu'
 
     # Modality MLP dimensions
     # Set to None to auto-calculate from feature counts, or provide explicit dimensions
@@ -339,10 +342,8 @@ class ModelConfig:
             'part2': ('part2_mlp_dims', feature_config.part2_features),
             'part3': ('part3_mlp_dims', feature_config.part3_features),
             'part4': ('part4_mlp_dims', feature_config.part4_features),
-            'motor': ('motor', feature_config.motor_features),
             'med': ('med_mlp_dims', feature_config.medication_features),
-            'non_motor': ('other_mlp_dims', feature_config.non_motor_features),
-            'age_at_visit': ('age_at_mlp_dims', feature_config.age_at_visit_features),
+            'other': ('other_mlp_dims', feature_config.other_nonmotor_features),
         }
 
         if modality not in modality_map:
@@ -359,9 +360,24 @@ class ModelConfig:
         n_features = len(feature_list)
         return calculate_mlp_dims(n_features, self.d_model)
 
-    # Prediction targets:
-    # All UPDRS totals: NP1RTOT (non-motor), NP2PTOT (motor ADL), NP3TOT (motor exam), NP4TOT (complications)
+    # Backward compatibility methods (no longer require feature_config)
+    def motor_mlp_dims(self, feature_config: Optional['FeatureConfig'] = None) -> List[int]:
+        """Get motor MLP dims (uses part3)"""
+        # Uses self._feature_config (single source of truth) - feature_config param for backward compat
+        if self.part3_mlp_dims is not None:
+            return self.part3_mlp_dims
+        return self.get_mlp_dims(modality='part3')
+
+    def nonmotor_mlp_dims(self, feature_config: Optional['FeatureConfig'] = None) -> List[int]:
+        """Get non-motor MLP dims (uses part1)"""
+        # Uses self._feature_config (single source of truth) - feature_config param for backward compat
+        if self.part1_mlp_dims is not None:
+            return self.part1_mlp_dims
+        return self.get_mlp_dims(modality='part1')
+
+    # Prediction targets
     predict_totals: List[str] = field(default_factory=lambda: ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
+    # All UPDRS totals: NP1RTOT (non-motor), NP2PTOT (motor ADL), NP3TOT (motor exam), NP4TOT (complications)
 
     # Prediction heads
     next_visit_hidden_dims: List[int] = field(default_factory=lambda: [128, 64])
@@ -446,11 +462,15 @@ class DataConfig:
     neuro_qol_upper: str = "Motor___MDS-UPDRS/Neuro_QoL__Upper_Extremity_Function_-_Short_Form_14Dec2025.csv"
     participant_motor: str = "Motor___MDS-UPDRS/Participant_Motor_Function_Questionnaire_14Dec2025.csv"
 
-    # Non-motor assessment files
+    # Non-motor clinical files
     moca: str = "Non-motor_Assessments/Montreal_Cognitive_Assessment__MoCA__14Dec2025.csv"
     ess: str = "Non-motor_Assessments/Epworth_Sleepiness_Scale_14Dec2025.csv"
     scopa_aut: str = "Non-motor_Assessments/SCOPA-AUT_14Dec2025.csv"
-    # schwab_england: str = "Motor___MDS-UPDRS/Modified_Schwab___England_Activities_of_Daily_Living_14Dec2025.csv"
+    
+    # Medication files
+    ledd: str = "Medical_History/LEDD_Concomitant_Medication_Log_14Dec2025.csv"
+    vital_signs: str = "Medical_History/Vital_Signs_14Dec2025.csv"
+    pd_diagnosis: str = "Medical_History/PD_Diagnosis_History_14Dec2025.csv"
 
     # Output paths (relative to V1_implementation directory)
     processed_data_dir: str = "data/processed"
@@ -493,3 +513,49 @@ def get_default_config() -> Config:
         training=TrainingConfig(),
         data=DataConfig()
     )
+
+
+if __name__ == "__main__":
+    # Print configuration
+    config = get_default_config()
+
+    print("=" * 80)
+    print("V1 Model Configuration")
+    print("=" * 80)
+
+    print("\n--- Feature Configuration ---")
+    print(f"Static features: {len(config.features.static_features)}")
+    print(f"Part I (non-motor): {len(config.features.part1_features)}")
+    print(f"Part II (motor ADL): {len(config.features.part2_features)}")
+    print(f"Part III (motor exam): {len(config.features.part3_features)}")
+    print(f"Part IV (complications): {len(config.features.part4_features)}")
+    print(f"Other non-motor: {len(config.features.other_nonmotor_features)}")
+    print(f"Medication context: {len(config.features.medication_features)}")
+    print(f"UPDRS totals: {', '.join(config.features.all_updrs_totals)}")
+
+    print("\n--- Model Configuration ---")
+    print(f"d_model: {config.model.d_model}")
+    print(f"n_heads: {config.model.n_heads}")
+    print(f"n_layers: {config.model.n_layers}")
+    print(f"max_seq_len: {config.model.max_seq_len}")
+
+    print("\n--- MLP Dimensions (Auto-calculated) ---")
+    modality_map = {
+        'static': 'static_features',
+        'part1': 'part1_features',
+        'part2': 'part2_features',
+        'part3': 'part3_features',
+        'part4': 'part4_features',
+        'med': 'medication_features',
+        'other': 'other_nonmotor_features',
+    }
+    for mod, attr_name in modality_map.items():
+        n_features = len(getattr(config.features, attr_name))
+        mlp_dims = config.model.get_mlp_dims(modality=mod)
+        print(f"{mod:8s}: {n_features:3d} features → {mlp_dims}")
+
+    print("\n--- Training Configuration ---")
+    print(f"batch_size: {config.training.batch_size}")
+    print(f"learning_rate: {config.training.learning_rate}")
+    print(f"lambda_slope: {config.training.lambda_slope}")
+    print(f"max_epochs: {config.training.max_epochs}")

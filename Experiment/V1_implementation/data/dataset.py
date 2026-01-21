@@ -528,7 +528,9 @@ def create_kfold_dataloaders(
     print("\n--- Creating Test Loader ---")
     test_integrator = DataIntegrator(config, normalize_features=True)
     test_integrator.fit_scalers(prepared_data, train_patnos=cv_ids)  # Fit on CV data
+    print("  [DEBUG] Scalers fitted. Starting create_feature_vectors...")
     test_feature_vectors = test_integrator.create_feature_vectors(prepared_data)
+    print("  [DEBUG] create_feature_vectors completed.")
     
     test_static_data = test_feature_vectors['static_data']
     test_longitudinal_data = test_feature_vectors['longitudinal_data']
@@ -572,9 +574,11 @@ def create_kfold_dataloaders(
         # IMPORTANT: Fit scalers on training fold only
         fold_integrator = DataIntegrator(config, normalize_features=True)
         fold_integrator.fit_scalers(prepared_data, train_patnos=fold_train_ids)
+        print(f"  [DEBUG] Fold {fold_idx + 1}: Creating feature vectors...")
         
         # Create feature vectors (will use scalers fitted on training fold)
         fold_feature_vectors = fold_integrator.create_feature_vectors(prepared_data)
+        print(f"  [DEBUG] Fold {fold_idx + 1}: Feature vectors created.")
         
         fold_static_data = fold_feature_vectors['static_data']
         fold_longitudinal_data = fold_feature_vectors['longitudinal_data']

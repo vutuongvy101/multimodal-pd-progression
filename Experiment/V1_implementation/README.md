@@ -274,14 +274,12 @@ python models/v1_model.py
 
 ### 6. Train Model
 
-**Standard training:**
+**Recommended: Use the unified CLI entrypoint:**
 ```bash
-python training/train.py
-```
+# Default: 5-fold cross-validation
+python -m training.main
 
-**K-fold cross-validation (recommended for robust evaluation):**
-```bash
-python training/train_kfold.py
+# See Training section below for full documentation
 ```
 
 ---
@@ -295,10 +293,12 @@ V1_implementation/
 ├── pyproject.toml               # Python project configuration
 ├── __init__.py                  # Package initialization
 │
-├── training/                    # Training & configuration
+├── training/                   # Training & configuration
 │   ├── config.py               # All hyperparameters & paths
-│   ├── train.py                # Training loop
-│   ├── train_kfold.py          # K-fold cross-validation training
+│   ├── main.py                 # Unified CLI entrypoint (RECOMMENDED)
+│   ├── train.py                # Training loop (V1Trainer class)
+│   ├── kfold_trainer.py        # K-fold CV trainer class
+│   ├── multi_modal_trainer.py  # Multi-modal ablation trainer
 │   └── __init__.py
 │
 ├── models/                      # Model architecture
@@ -335,7 +335,7 @@ V1_implementation/
 - **Model**: `models/v1_model.py` - Complete V1 Transformer architecture
 - **Data Pipeline**: `data/data_integrator.py` - Combines all data loaders (includes feature scaling)
 - **Training**: `training/train.py` - Training loop and model training
-- **K-Fold Training**: `training/train_kfold.py` - K-fold cross-validation training script
+- **K-Fold Training**: `training/kfold_trainer.py` - K-fold cross-validation trainer
 - **Dataset**: `data/dataset.py` - PyTorch Dataset & DataLoader utilities (includes k-fold dataloaders)
 - **Tests**: `tests/` - Comprehensive test suite for all components
 
@@ -807,6 +807,240 @@ time_encoding = SinusoidalEncoding(months_since_baseline)
 
 ## Training
 
+### Training with `main.py` (Recommended)
+
+The `training/main.py` script provides a unified CLI entrypoint for all training workflows. It supports multiple training modes, automatic checkpointing, and multi-modal ablation studies.
+
+#### Quick Start
+
+```bash
+# Default: 5-fold cross-validation training
+python -m training.main
+
+# With custom settings
+python -m training.main --mode kfold --n-splits 5 --max-epochs 70 --batch-size 32
+```
+
+### Training Modes
+
+The `--mode` flag determines the training strategy:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `kfold` | K-fold cross-validation (default) | Robust evaluation, model selection |
+| `single` | Single train/val/test split | Quick experiments, fine-tuning |
+| `multi_modal` | Train multiple models with different modality combinations | Ablation studies, modality comparison |
+
+### Command-Line Arguments
+
+```bash
+python -m training.main [OPTIONS]
+
+# Mode Selection
+--mode {kfold,single,multi_modal}   # Training mode (default: kfold)
+--config-version {v1,v2}             # Config version (default: v1)
+
+# K-Fold CV Settings (for --mode kfold or multi_modal)
+--n-splits N                         # Number of CV folds (default: 5)
+--test-ratio RATIO                   # Test set ratio (default: 0.2)
+
+# Single Split Settings (for --mode single)
+--train-ratio RATIO                  # Train split ratio (default: 0.8)
+--val-ratio RATIO                    # Val split ratio (default: 0.1)
+
+# Hyperparameters (override config defaults)
+--max-epochs N                       # Maximum epochs
+--patience N                         # Early stopping patience
+--batch-size N                       # Batch size
+--learning-rate LR                   # Learning rate
+--weight-decay WD                    # Weight decay
+
+# Multi-Modal Training (for --mode multi_modal)
+--modalities SPEC [SPEC ...]         # Modality configurations to train
+--force-retrain                      # Force retrain even if checkpoint exists
+
+# Fine-Tuning (for --mode single)
+--checkpoint PATH                    # Path to checkpoint for fine-tuning
+--resume-mode {model-only,full}      # Resume mode (default: model-only)
+--freeze-backbone                    # Freeze embeddings + transformer
+
+# Other Options
+--device {cuda,mps,cpu}              # Device (default: auto-detect)
+--num-workers N                      # DataLoader workers (default: 0)
+--seed N                             # Random seed (default: 42)
+--no-normalize                       # Disable feature normalization
+--evaluate-test                      # Evaluate on test set after training
+```
+
+### Training Examples
+
+#### 1. K-Fold Cross-Validation (Default)
+
+**Best for:** Model evaluation, hyperparameter selection, robust performance estimates.
+
+```bash
+# Default 5-fold CV with 20% test set
+python -m training.main
+
+# Custom CV settings
+python -m training.main \
+  --mode kfold \
+  --n-splits 3 \
+  --test-ratio 0.15 \
+  --max-epochs 70 \
+  --patience 10 \
+  --evaluate-test
+
+# Using config v2
+python -m training.main \
+  --config-version v2 \
+  --n-splits 5
+```
+
+**Output:**
+- Per-fold checkpoints: `models/checkpoints/fold_1/`, `fold_2/`, etc.
+- CV results: `models/checkpoints/kfold_results.json`
+- Average validation loss across folds with standard deviation
+
+#### 2. Single Train/Val/Test Split
+
+**Best for:** Quick experiments, fine-tuning from a checkpoint, development.
+
+```bash
+# Standard single split
+python -m training.main \
+  --mode single \
+  --train-ratio 0.8 \
+  --val-ratio 0.1
+
+# Fine-tuning from checkpoint
+python -m training.main \
+  --mode single \
+  --checkpoint models/checkpoints/best_checkpoint.pt \
+  --resume-mode model-only \
+  --learning-rate 5e-5
+
+# Head-only fine-tuning (freeze backbone)
+python -m training.main \
+  --mode single \
+  --checkpoint models/checkpoints/best_checkpoint.pt \
+  --freeze-backbone \
+  --learning-rate 1e-4
+```
+
+#### 3. Multi-Modal Ablation Studies
+
+**Best for:** Comparing different modality combinations, understanding which modalities matter most.
+
+```bash
+# Train with default modality sets
+python -m training.main --mode multi_modal
+
+# Train specific modality combinations
+python -m training.main \
+  --mode multi_modal \
+  --modalities all static+motor motor_only static_only
+
+# Use predefined sets + custom combinations
+python -m training.main \
+  --mode multi_modal \
+  --modalities all static+motor static,motor,nonmotor
+
+# Force retrain everything (ignore existing checkpoints)
+python -m training.main \
+  --mode multi_modal \
+  --modalities all static+motor \
+  --force-retrain
+```
+
+**Predefined Modality Sets:**
+- `all`: All modalities (default)
+- `static+motor`: Static + motor only
+- `static+nonmotor`: Static + non-motor only
+- `motor_only`: Motor only
+- `static_only`: Static only
+- `no_static`: All except static
+- `no_motor`: All except motor
+- And more...
+
+**Custom Combinations:**
+- Use comma-separated list: `static,motor,nonmotor`
+- Automatically sorted and deduplicated
+
+**Output Structure:**
+```
+models/checkpoints/
+├── modalities_all/
+│   ├── fold_1/
+│   ├── fold_2/
+│   ├── kfold_results.json
+│   └── MODALITY_TRAINING_COMPLETE.json
+├── modalities_static+motor/
+│   └── ...
+├── multi_modal_training_summary.json  # Comparison across all configs
+└── ...
+```
+
+**Checkpoint Detection:**
+- Automatically skips already-trained configurations
+- Checks for `MODALITY_TRAINING_COMPLETE.json` marker
+- Use `--force-retrain` to retrain anyway
+
+### Training Workflows
+
+#### Workflow 1: Model Selection with K-Fold CV
+
+```bash
+# Step 1: Run k-fold CV to select best hyperparameters
+python -m training.main \
+  --mode kfold \
+  --n-splits 5 \
+  --max-epochs 100 \
+  --learning-rate 1e-4
+
+# Step 2: Review results in models/checkpoints/kfold_results.json
+# Step 3: Adjust hyperparameters and retrain if needed
+# Step 4: Use train_full mode (TODO) to train final model on all data
+```
+
+#### Workflow 2: Modality Ablation Study
+
+```bash
+# Step 1: Train all modality configurations
+python -m training.main \
+  --mode multi_modal \
+  --modalities all static+motor static+nonmotor motor_only static_only
+
+# Step 2: Review comparison in models/checkpoints/multi_modal_training_summary.json
+# Step 3: Identify best modality combination
+# Step 4: Train final model with best configuration
+python -m training.main \
+  --mode kfold \
+  --config-version v1
+  # (manually edit config.model.enabled_modalities to best combination)
+```
+
+#### Workflow 3: Fine-Tuning Pipeline
+
+```bash
+# Step 1: Train base model with all modalities
+python -m training.main --mode kfold --n-splits 5
+
+# Step 2: Fine-tune best fold's model
+python -m training.main \
+  --mode single \
+  --checkpoint models/checkpoints/fold_1/best_checkpoint.pt \
+  --resume-mode model-only \
+  --learning-rate 5e-5
+
+# Step 3: Optional: Head-only fine-tuning
+python -m training.main \
+  --mode single \
+  --checkpoint models/checkpoints/best_checkpoint.pt \
+  --freeze-backbone \
+  --learning-rate 1e-4
+```
+
 ### Default Hyperparameters
 
 ```python
@@ -825,87 +1059,40 @@ max_epochs = 100
 early_stopping_patience = 15
 ```
 
-### Training Loop
+All hyperparameters can be overridden via command-line arguments (see `--max-epochs`, `--learning-rate`, etc.).
+
+### Training Programmatically (Advanced)
+
+For programmatic access, you can still use the training classes directly:
 
 ```python
 from models.v1_model import V1MultimodalTransformer
 from training.train import V1Trainer
-from training.config import get_default_config
-
-config = get_default_config()
-model = V1MultimodalTransformer(config)
-
-trainer = V1Trainer(
-    model=model,
-    config=config,
-    train_loader=train_loader,
-    val_loader=val_loader,
-    device='cuda'
-)
-
-trainer.train(max_epochs=100, early_stopping_patience=15)
-```
-
-### K-Fold Cross-Validation
-
-The project supports **k-fold cross-validation** for robust model evaluation. This is especially useful for small datasets where a single train/val/test split might not be reliable.
-
-**Key Features:**
-- Proper scaler fitting per fold (fitted on training fold, applied to validation fold)
-- Automatic patient splitting into k folds
-- Optional held-out test set (separate from CV folds)
-- Average performance metrics across folds
-
-**Usage:**
-
-```python
-from models.v1_model import V1MultimodalTransformer
-from training.train import V1Trainer
-from training.train_kfold import train_kfold
+from training.kfold_trainer import KFoldTrainer
+from training.multi_modal_trainer import MultiModalTrainer
 from training.config import get_default_config
 from data.data_integrator import DataIntegrator
-from data.dataset import create_kfold_dataloaders
 
 config = get_default_config()
 
-# Option 1: Use the convenience function (recommended)
-results = train_kfold(
-    config=config,
-    n_splits=5,        # 5-fold CV
-    n_epochs=50,       # Epochs per fold
-    device='cuda'
-)
+# Option 1: Single training
+model = V1MultimodalTransformer(config)
+trainer = V1Trainer(model, config, train_loader, val_loader, device='cuda')
+trainer.train(max_epochs=100, early_stopping_patience=15)
 
-# Option 2: Manual setup for more control
+# Option 2: K-fold CV
 integrator = DataIntegrator(config, normalize_features=True)
-prepared_data = integrator.prepare_final_dataset()
+prepared = integrator.prepare_final_dataset()
+kfold_trainer = KFoldTrainer(config, prepared, n_splits=5)
+results = kfold_trainer.train()
 
-# Create k-fold dataloaders (automatically handles scaler fitting per fold)
-fold_dataloaders, test_loader = create_kfold_dataloaders(
-    prepared_data=prepared_data,
-    config=config,
-    n_splits=5,
-    test_ratio=0.2,    # Hold out 20% as test set
-    random_seed=42
+# Option 3: Multi-modal ablation
+multi_modal_trainer = MultiModalTrainer(config, prepared)
+results = multi_modal_trainer.train_multiple(
+    modality_specs=['all', 'static+motor', 'motor_only'],
+    force_retrain=False
 )
-
-# Train on each fold
-for fold_idx, (train_loader, val_loader) in enumerate(fold_dataloaders):
-    model = V1MultimodalTransformer(config)
-    trainer = V1Trainer(model, config, train_loader, val_loader, device='cuda')
-    trainer.train(max_epochs=50, early_stopping_patience=15)
-    
-    # Evaluate on validation fold
-    val_metrics = trainer.validate()
-    print(f"Fold {fold_idx + 1} Val Loss: {val_metrics['loss']:.4f}")
 ```
-
-**Important Notes:**
-- Scalers are fitted **per fold** on the training fold data only
-- Test set is held out completely and scalers are fitted on all CV data (not test data) before applying to test set
-- Each fold trains an independent model (you get k models)
-- Use average metrics across folds to assess model performance
-- For final evaluation, retrain on all training data (all folds combined) and evaluate on held-out test set
 
 ### Expected Performance
 
@@ -1264,6 +1451,10 @@ python data/data_integrator.py
 
 ### Train Model
 ```bash
+# Recommended: Use unified CLI
+python -m training.main
+
+# Or use legacy script
 python training/train.py
 ```
 

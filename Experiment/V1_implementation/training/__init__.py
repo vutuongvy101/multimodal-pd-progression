@@ -4,6 +4,8 @@ Training utilities
 
 from .config import get_default_config, FeatureConfig, ModelConfig, TrainingConfig, DataConfig
 from .train import V1Trainer
+from .kfold_trainer import KFoldTrainer
+from .multi_modal_trainer import MultiModalTrainer
 
 __all__ = [
     'get_default_config',
@@ -11,5 +13,7 @@ __all__ = [
     'ModelConfig',
     'TrainingConfig',
     'DataConfig',
-    'V1Trainer'
+    'V1Trainer',
+    'KFoldTrainer',
+    'MultiModalTrainer'
 ]

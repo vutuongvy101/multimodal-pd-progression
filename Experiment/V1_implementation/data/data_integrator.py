@@ -573,7 +573,10 @@ class DataIntegrator:
         
         # Create per-patient static data
         static_data = {}
-        for patno in static_df['PATNO'].unique():
+        patient_list = static_df['PATNO'].unique()
+        for i, patno in enumerate(patient_list):
+            if (i + 1) % 2000 == 0:
+                print(f"    Processing static features: {i + 1}/{len(patient_list)} patients...")
             patient_row = static_df[static_df['PATNO'] == patno].iloc[0]
             # Get feature columns (exclude PATNO)
             feature_cols = [c for c in static_cols if c != 'PATNO']
@@ -615,7 +618,10 @@ class DataIntegrator:
             med_cols = [c for c in medication_features if c in longitudinal_df.columns]
             
             # Group by patient
-            for patno, group in longitudinal_df.groupby('PATNO'):
+            patient_groups = list(longitudinal_df.groupby('PATNO'))
+            for i, (patno, group) in enumerate(patient_groups):
+                if (i + 1) % 2000 == 0:
+                    print(f"    Processing longitudinal data: {i + 1}/{len(patient_groups)} patients...")
                 # Sort by time (months_since_baseline or EVENT_ID order)
                 if 'months_since_baseline' in group.columns:
                     group = group.sort_values('months_since_baseline')

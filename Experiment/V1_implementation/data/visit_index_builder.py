@@ -231,6 +231,18 @@ class VisitIndexBuilder:
         
         modality_subset = modality_df[['PATNO', 'EVENT_ID'] + available_cols].copy()
         
+        # Deduplicate by (PATNO, EVENT_ID) - take mean for numeric features
+        # This prevents the merge from creating extra rows when modality_df has duplicates
+        if len(modality_subset) != len(modality_subset.drop_duplicates(subset=['PATNO', 'EVENT_ID'])):
+            # Convert feature columns to numeric before aggregation
+            for col in available_cols:
+                modality_subset[col] = pd.to_numeric(modality_subset[col], errors='coerce')
+            
+            # Group by (PATNO, EVENT_ID) and take mean of feature columns
+            modality_subset = modality_subset.groupby(['PATNO', 'EVENT_ID'], as_index=False).agg({
+                col: 'mean' for col in available_cols
+            })
+        
         # Left join: keep all visits from index
         merged = visit_index[['PATNO', 'EVENT_ID']].merge(
             modality_subset,
@@ -239,8 +251,17 @@ class VisitIndexBuilder:
         )
         
         # Build values and mask arrays
-        n_visits = len(merged)
+        # Use len(visit_index) to ensure we match the expected number of visits
+        # (left join should preserve all rows from visit_index after deduplication)
+        n_visits = len(visit_index)
         n_features = len(feature_cols)
+        
+        # Ensure merged has the same number of rows (should be true after deduplication)
+        if len(merged) != n_visits:
+            raise ValueError(
+                f"Merge result has {len(merged)} rows but visit_index has {n_visits} rows. "
+                f"This suggests duplicate (PATNO, EVENT_ID) in modality_df that weren't deduplicated."
+            )
         values = np.zeros((n_visits, n_features), dtype=np.float32)
         mask = np.ones((n_visits, n_features), dtype=np.float32)  # Default: all missing
         

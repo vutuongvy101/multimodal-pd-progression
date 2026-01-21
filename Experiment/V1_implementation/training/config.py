@@ -284,7 +284,7 @@ class ModelConfig:
     # Options: 'static', 'motor', 'nonmotor', 'medication'
     # This enables ablation studies and modality-specific experiments
     enabled_modalities: List[str] = field(default_factory=lambda: [
-        'static', 'motor', 'nonmotor', 'medication'
+        'static', 'motor', 'non_motor', 'medication', 'age_at_visit'
     ])
 
     # Modality MLP dimensions
@@ -301,8 +301,10 @@ class ModelConfig:
     part2_mlp_dims: Optional[List[int]] = None
     part3_mlp_dims: Optional[List[int]] = None
     part4_mlp_dims: Optional[List[int]] = None
+    motor_mlp_dims: Optional[List[int]] = None
     med_mlp_dims: Optional[List[int]] = None
     other_mlp_dims: Optional[List[int]] = None
+    age_at_mlp_dims: Optional[List[int]] = None
 
     # Internal reference to FeatureConfig (set by parent Config during initialization)
     _feature_config: Optional['FeatureConfig'] = None
@@ -316,7 +318,7 @@ class ModelConfig:
         
         Args:
             feature_config: Optional FeatureConfig (deprecated - uses self._feature_config)
-            modality: One of 'static', 'part1', 'part2', 'part3', 'part4', 'med', 'other'
+            modality: One of 'static', 'part1', 'part2', 'part3', 'part4', motor, non_motor 'med', 'age_at_visit'
         
         Returns:
             List of MLP hidden layer dimensions
@@ -339,7 +341,7 @@ class ModelConfig:
             'part2': ('part2_mlp_dims', feature_config.part2_features),
             'part3': ('part3_mlp_dims', feature_config.part3_features),
             'part4': ('part4_mlp_dims', feature_config.part4_features),
-            'motor': ('motor', feature_config.motor_features),
+            'motor': ('motor_mlp_dims', feature_config.motor_features),
             'med': ('med_mlp_dims', feature_config.medication_features),
             'non_motor': ('other_mlp_dims', feature_config.non_motor_features),
             'age_at_visit': ('age_at_mlp_dims', feature_config.age_at_visit_features),

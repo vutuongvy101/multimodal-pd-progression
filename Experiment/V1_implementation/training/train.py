@@ -175,6 +175,8 @@ class V1Trainer:
                 batch['nonmotor_mask'],
                 batch['med_values'],
                 batch['med_mask'],
+                batch['age_at_visit_values'],
+                batch['age_at_visit_mask'],
                 batch['time_months'],
                 batch['attention_mask']
             )

@@ -134,6 +134,7 @@ class TestV1Model:
         n_motor = len(test_config.features.motor_features)
         n_nonmotor = len(test_config.features.non_motor_features)
         n_med = len(test_config.features.medication_features)
+        n_age = len(test_config.features.age_at_visit_features)
         n_targets = len(test_config.model.predict_totals)
 
         # Create mock input data
@@ -141,13 +142,15 @@ class TestV1Model:
         motor_values = torch.randn(batch_size, seq_len, n_motor)
         nonmotor_values = torch.randn(batch_size, seq_len, n_nonmotor)
         med_values = torch.randn(batch_size, seq_len, n_med)
-        
+        age_values = torch.randn(batch_size, seq_len, n_age)
+
         # Create masks (0 = observed, 1 = missing)
         static_mask = torch.zeros(batch_size, n_static)
         motor_mask = torch.zeros(batch_size, seq_len, n_motor)
         nonmotor_mask = torch.zeros(batch_size, seq_len, n_nonmotor)
         med_mask = torch.zeros(batch_size, seq_len, n_med)
-        
+        age_mask = torch.zeros(batch_size, seq_len, n_age)
+
         # Create time and attention masks
         time_months = torch.randn(batch_size, seq_len).abs()
         attention_mask = torch.ones(batch_size, seq_len)
@@ -162,6 +165,8 @@ class TestV1Model:
                 nonmotor_mask=nonmotor_mask,
                 med_values=med_values,
                 med_mask=med_mask,
+                age_at_visit_values=age_values,
+                age_at_visit_mask=age_mask,
                 time_months=time_months,
                 attention_mask=attention_mask
             )

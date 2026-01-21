@@ -81,7 +81,7 @@ class V1MultimodalTransformer(nn.Module):
                 n_motor, d_model, motor_mlp_dims, model_config.dropout
             )
         
-        if 'nonmotor' in self.enabled_modalities:
+        if 'non_motor' in self.enabled_modalities:
             n_nonmotor = len(feature_config.non_motor_features)
             nonmotor_mlp_dims = model_config.get_mlp_dims(modality='non_motor')
             self.nonmotor_embedding = VisitFeatureEmbedding(
@@ -93,6 +93,13 @@ class V1MultimodalTransformer(nn.Module):
             med_mlp_dims = model_config.get_mlp_dims(modality='med')
             self.med_embedding = VisitFeatureEmbedding(
                 n_med, d_model, med_mlp_dims, model_config.dropout
+            )
+
+        if 'age_at_visit' in self.enabled_modalities:
+            n_age = len(feature_config.age_at_visit_features)
+            age_mlp_dims = model_config.get_mlp_dims(modality='age_at_visit')
+            self.age_at_visit_embedding = VisitFeatureEmbedding(
+                n_age, d_model, age_mlp_dims, model_config.dropout
             )
         
         # 2. Visit token builder (with dynamic modality support)
@@ -141,6 +148,8 @@ class V1MultimodalTransformer(nn.Module):
         nonmotor_mask: torch.Tensor,
         med_values: torch.Tensor,
         med_mask: torch.Tensor,
+        age_at_visit_values: torch.Tensor,
+        age_at_visit_mask: torch.Tensor,
         time_months: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
@@ -156,6 +165,8 @@ class V1MultimodalTransformer(nn.Module):
             nonmotor_mask: [batch, seq_len, n_nonmotor_features] - 1 if missing
             med_values: [batch, seq_len, n_med_features]
             med_mask: [batch, seq_len, n_med_features] - 1 if missing
+            age_at_visit_values: [batch, seq_len, n_age_features]
+            age_at_visit_mask: [batch, seq_len, n_age_features] - 1 if missing
             time_months: [batch, seq_len] - months since baseline
             attention_mask: [batch, seq_len] - 1 for valid visit, 0 for padding
             
@@ -179,11 +190,14 @@ class V1MultimodalTransformer(nn.Module):
         if 'motor' in self.enabled_modalities:
             embeddings['motor'] = self.motor_embedding(motor_values, motor_mask)
         
-        if 'nonmotor' in self.enabled_modalities:
-            embeddings['nonmotor'] = self.nonmotor_embedding(nonmotor_values, nonmotor_mask)
+        if 'non_motor' in self.enabled_modalities:
+            embeddings['non_motor'] = self.nonmotor_embedding(nonmotor_values, nonmotor_mask)
         
         if 'medication' in self.enabled_modalities:
             embeddings['medication'] = self.med_embedding(med_values, med_mask)
+
+        if 'age_at_visit' in self.enabled_modalities:
+            embeddings['age_at_visit'] = self.age_at_visit_embedding(age_at_visit_values, age_at_visit_mask)
         
         # 2. Build visit tokens from enabled modalities
         visit_tokens = self.visit_builder(embeddings, seq_len)
@@ -336,6 +350,7 @@ if __name__ == "__main__":
     n_motor = len(config.features.motor_features)
     n_nonmotor = len(config.features.non_motor_features)  # 'nonmotor' maps to non_motor_features
     n_med = len(config.features.medication_features)
+    n_age = len(config.features.age_at_visit_features)
     n_targets = len(config.model.predict_totals)
     
     print(f"\nCreating dummy data:")
@@ -344,6 +359,7 @@ if __name__ == "__main__":
     print(f"  Motor features: {n_motor}")
     print(f"  Non-motor features: {n_nonmotor}")
     print(f"  Medication features: {n_med}")
+    print(f"  Age at visit features: {n_age}")
     
     static_values = torch.randn(batch_size, n_static)
     static_mask = torch.bernoulli(torch.ones_like(static_values) * 0.1)
@@ -356,7 +372,10 @@ if __name__ == "__main__":
     
     med_values = torch.randn(batch_size, seq_len, n_med)
     med_mask = torch.bernoulli(torch.ones_like(med_values) * 0.05)
-    
+
+    age_values = torch.randn(batch_size, seq_len, n_age)
+    age_mask = torch.bernoulli(torch.ones_like(age_values) * 0.05)
+
     time_months = torch.linspace(0, 48, seq_len).unsqueeze(0).expand(batch_size, -1)
     
     attention_mask = torch.ones(batch_size, seq_len)
@@ -370,6 +389,7 @@ if __name__ == "__main__":
         motor_values, motor_mask,
         nonmotor_values, nonmotor_mask,
         med_values, med_mask,
+        age_values, age_mask,
         time_months,
         attention_mask
     )
@@ -418,6 +438,7 @@ if __name__ == "__main__":
         motor_values, motor_mask,
         nonmotor_values, nonmotor_mask,  # Will be ignored
         med_values, med_mask,             # Will be ignored
+        age_values, age_mask,             # Will be ignored
         time_months,
         attention_mask
     )

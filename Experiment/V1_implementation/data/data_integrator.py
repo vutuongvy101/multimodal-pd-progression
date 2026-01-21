@@ -183,6 +183,7 @@ class DataIntegrator:
         self.updrs_supplementary_scaler = FeatureScaler() if normalize_features else None
         self.non_motor_scaler = FeatureScaler() if normalize_features else None
         self.medication_scaler = FeatureScaler() if normalize_features else None
+        self.age_at_visit_scaler = FeatureScaler() if normalize_features else None
         
         # Load participant_status once and share across all loaders
         print("Loading participant status (shared across all loaders)...")
@@ -516,6 +517,17 @@ class DataIntegrator:
                 )
                 self.medication_scaler.fit_transform(med_values, med_mask, med_cols)
                 print(f"  ✓ Fitted medication scaler: {len(med_cols)} features")
+
+        # Fit age at visit scaler
+        age_at_visit_features = getattr(self.config.features, 'age_at_visit_features', [])
+        if isinstance(age_at_visit_features, (list, tuple, set)) and age_at_visit_features:
+            age_at_visit_cols = [c for c in age_at_visit_features if c in longitudinal_df.columns]
+            if age_at_visit_cols and self.age_at_visit_scaler:
+                age_at_visit_value, age_at_visit_mask = self.create_missingness_masks(
+                    longitudinal_df, age_at_visit_cols, scaler=None
+                )
+                self.age_at_visit_scaler.fit_transform(age_at_visit_value, age_at_visit_mask, age_at_visit_cols)
+                print(f"  ✓ Fitted age_at_visit scaler: {len(age_at_visit_cols)} features")
         
         print("  ✓ All scalers fitted")
     
@@ -615,7 +627,7 @@ class DataIntegrator:
                     for i in range(1, 26):
                         event_order[f'V{i:02d}'] = i
                     group['_visit_order'] = group['EVENT_ID'].map(lambda x: event_order.get(x, 999))
-                    group = group.sort_values('_visit_order')
+                    group = group.sort_values('_visit_order').drop(columns=['_visit_order'])
                 
                 visits = []
                 for _, visit_row in group.iterrows():
@@ -897,6 +909,7 @@ class DataIntegrator:
                         if c in non_motor_df.columns]
         med_cols = [c for c in self.config.features.medication_features if c in medication_df.columns]
         updrs_total_cols = self.config.features.all_updrs_totals
+        age_at_visit_cols = self.config.features.age_at_visit_features
         
         # Create per-patient longitudinal data
         longitudinal_data = {}
@@ -950,7 +963,17 @@ class DataIntegrator:
                 else:
                     visit_dict['med_values'] = np.zeros(len(med_cols) if med_cols else 0, dtype=np.float32)
                     visit_dict['med_mask'] = np.ones(len(med_cols) if med_cols else 0, dtype=np.float32)
-                
+
+                # Age At Visit features
+                age_at_visit = age_at_visit_df[(age_at_visit_df['PATNO'] == patno) & (age_at_visit_df['EVENT_ID'] == event_id)] if len(age_at_visit_df) > 0 else pd.DataFrame()
+                if len(age_at_visit) > 0 and age_at_visit_cols:
+                    age_at_visit_values, age_at_visit_mask = self.create_missingness_masks(age_at_visit, age_at_visit_cols, scaler=self.age_at_visit_scaler)
+                    visit_dict['age_at_visit_values'] = age_at_visit_values[0]
+                    visit_dict['age_at_visit_mask'] = age_at_visit_mask[0]
+                else:
+                    visit_dict["age_at_visit_values"] = np.zeros(len(age_at_visit_cols) if age_at_visit_cols else 0, dtype=np.float32)
+                    visit_dict["age_at_visit_mask"] = np.zeros(len(age_at_visit_cols) if age_at_visit_cols else 0, dtype=np.float32)
+
                 # Time features from visit_index
                 visit_dict['time_months'] = float(visit_row['months_since_baseline']) if pd.notna(visit_row['months_since_baseline']) else 0.0
                 visit_dict['delta_months'] = float(visit_row['delta_months']) if pd.notna(visit_row['delta_months']) else 0.0

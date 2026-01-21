@@ -97,6 +97,8 @@ class PPMILongitudinalDataset(Dataset):
         nonmotor_mask = [visit['nonmotor_mask'] for visit in visits]
         med_values = [visit['med_values'] for visit in visits]
         med_mask = [visit['med_mask'] for visit in visits]
+        age_at_visit_values = [visit['age_at_visit_values'] for visit in visits]
+        age_at_visit_mask = [visit['age_at_visit_mask'] for visit in visits]
         time_months = [visit['time_months'] for visit in visits]
         
         # Extract UPDRS totals (NP1TOT, NP2TOT, NP3TOT, NP4TOT)
@@ -124,6 +126,8 @@ class PPMILongitudinalDataset(Dataset):
         nonmotor_mask = torch.FloatTensor(np.array(nonmotor_mask))
         med_values = torch.FloatTensor(np.array(med_values))
         med_mask = torch.FloatTensor(np.array(med_mask))
+        age_at_visit_values = torch.FloatTensor(np.array(age_at_visit_values))
+        age_at_visit_mask = torch.FloatTensor(np.array(age_at_visit_mask))
         time_months = torch.FloatTensor(time_months)
         next_visit_targets = torch.FloatTensor(updrs_totals_filled)  # [seq_len, 4]
         next_visit_label_mask = torch.FloatTensor(label_mask)  # [seq_len, 4]
@@ -142,7 +146,6 @@ class PPMILongitudinalDataset(Dataset):
             slope_value = slope_dict if not pd.isna(slope_dict) else float('nan')
         
         slope_target = torch.FloatTensor([slope_value])
-        
         return {
             'static_values': static_values,
             'static_mask': static_mask,
@@ -152,6 +155,8 @@ class PPMILongitudinalDataset(Dataset):
             'nonmotor_mask': nonmotor_mask,
             'med_values': med_values,
             'med_mask': med_mask,
+            'age_at_visit_values': age_at_visit_values,
+            'age_at_visit_mask': age_at_visit_mask,
             'time_months': time_months,
             'next_visit_targets': next_visit_targets,
             'next_visit_label_mask': next_visit_label_mask,  # NEW: Label availability mask
@@ -185,6 +190,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     n_motor = batch[0]['motor_values'].shape[-1]
     n_nonmotor = batch[0]['nonmotor_values'].shape[-1]
     n_med = batch[0]['med_values'].shape[-1]
+    n_age = batch[0]['age_at_visit_values'].shape[-1]  # NEW batch[0]['age_at_visit_values'].shape[-1]
     
     # Initialize padded tensors
     motor_values_padded = torch.zeros(batch_size, max_len, n_motor)
@@ -193,6 +199,8 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     nonmotor_mask_padded = torch.ones(batch_size, max_len, n_nonmotor)
     med_values_padded = torch.zeros(batch_size, max_len, n_med)
     med_mask_padded = torch.ones(batch_size, max_len, n_med)
+    age_values_padded = torch.zeros(batch_size, max_len, n_age)
+    age_mask_padded = torch.ones(batch_size, max_len, n_age)
     time_months_padded = torch.zeros(batch_size, max_len)
     
     # next_visit_targets is now [seq_len, n_targets] where n_targets=4
@@ -210,6 +218,8 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         nonmotor_mask_padded[i, :seq_len] = item['nonmotor_mask']
         med_values_padded[i, :seq_len] = item['med_values']
         med_mask_padded[i, :seq_len] = item['med_mask']
+        age_values_padded[i, :seq_len] = item['age_at_visit_values']
+        age_mask_padded[i, :seq_len] = item['age_at_visit_mask']
         time_months_padded[i, :seq_len] = item['time_months']
         
         # Handle both old format [seq_len] and new format [seq_len, n_targets]
@@ -242,6 +252,8 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         'nonmotor_mask': nonmotor_mask_padded,
         'med_values': med_values_padded,
         'med_mask': med_mask_padded,
+        'age_at_visit_values': age_values_padded,
+        'age_at_visit_mask': age_values_padded,
         'time_months': time_months_padded,
         'attention_mask': attention_mask,
         'next_visit_targets': next_visit_targets_padded,

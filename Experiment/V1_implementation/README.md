@@ -39,7 +39,7 @@ A simplified, production-ready deep learning model for PD progression prediction
 | **Medication-Aware** | Explicit ON/OFF status and LEDD as features |
 | **Missingness Handling** | Built-in masks for each modality |
 | **Time-Aware** | Continuous time encoding (actual months, not indices) |
-| **Multi-Objective** | Predicts next-visit UPDRS totals (NP1TOT, NP2TOT, NP3TOT, NP4TOT) + patient-level progression slopes |
+| **Multi-Objective** | Predicts next-visit UPDRS totals (NP1RTOT, NP2PTOT, NP3TOT, NP4TOT) + patient-level progression slope (default: NP3TOT_slope) |
 
 ---
 
@@ -263,8 +263,14 @@ python data_integrator.py
 
 ### 7. Train Model
 
+**Standard training:**
 ```bash
 python training/train.py
+```
+
+**K-fold cross-validation (recommended for robust evaluation):**
+```bash
+python training/train_kfold.py
 ```
 
 ---
@@ -281,6 +287,7 @@ V1_implementation/
 ├── training/                    # Training & configuration
 │   ├── config.py               # All hyperparameters & paths
 │   ├── train.py                # Training loop
+│   ├── train_kfold.py          # K-fold cross-validation training
 │   └── __init__.py
 │
 ├── models/                      # Model architecture
@@ -315,8 +322,10 @@ V1_implementation/
 
 - **Configuration**: `training/config.py` - All hyperparameters, paths, and settings
 - **Model**: `models/v1_model.py` - Complete V1 Transformer architecture
-- **Data Pipeline**: `data/data_integrator.py` - Combines all data loaders
+- **Data Pipeline**: `data/data_integrator.py` - Combines all data loaders (includes feature scaling)
 - **Training**: `training/train.py` - Training loop and model training
+- **K-Fold Training**: `training/train_kfold.py` - K-fold cross-validation training script
+- **Dataset**: `data/dataset.py` - PyTorch Dataset & DataLoader utilities (includes k-fold dataloaders)
 - **Tests**: `tests/` - Comprehensive test suite for all components
 
 ---
@@ -449,8 +458,12 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
 ├─────────────────────────────────────────────────────────────────┤
 │ For each patient with ≥min_visits visits:                        │
 │   - Fit linear regression: score ~ months_since_baseline        │
-│   - Extract slope for NP1TOT, NP2TOT, NP3TOT, NP4TOT           │
-│ → slopes_df (one row per patient)                                │
+│   - Compute slope for NP1RTOT, NP2PTOT, NP3TOT, NP4TOT           │
+│   - Store all slopes per patient (slopes_dict)                   │
+│ → slopes_df (one row per patient with all slope columns)         │
+│                                                                   │
+│ Note: Model predicts ONE slope per patient (default: NP3TOT_slope)│
+│       but slopes are computed for all totals during preparation   │
 └─────────────────────────────────────────────────────────────────┘
                          │
                          ▼
@@ -467,7 +480,8 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
 ├─────────────────────────────────────────────────────────────────┤
 │ - 'static': DataFrame (patient-level features)                  │
 │ - 'longitudinal': DataFrame (visit-level features)              │
-│ - 'slopes': DataFrame (patient-level progression slopes)        │
+│ - 'slopes': DataFrame (patient-level progression slopes for all totals)        │
+│   Columns: PATNO, NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope   │
 │ - 'metadata': Summary statistics                                │
 └─────────────────────────────────────────────────────────────────┘
                          │
@@ -480,7 +494,9 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
 │   - Missing value masks (1=missing, 0=present)                  │
 │   - Per-patient static data: {'values': array, 'mask': array}   │
 │   - Per-patient longitudinal data: List of visit dicts          │
-│   - Slopes dictionary: {PATNO: slope_value}                     │
+│   - Slopes dictionary: {PATNO: Dict[str, float]}                │
+│     Keys: 'NP1RTOT_slope', 'NP2PTOT_slope', 'NP3TOT_slope', etc.│
+│     Model uses NP3TOT_slope by default (primary target)         │
 │                                                                  │
 │ This format is ready for PPMILongitudinalDataset                │
 │ Note: Called automatically by create_dataloaders() if needed    │
@@ -503,6 +519,43 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
 - `create_feature_vectors()` - Converts DataFrames to dataset format with missing value handling (REQUIRED for training)
 - `create_missingness_masks()` - Creates explicit masks for missing values (used internally)
 - `create_dataloaders()` - Creates train/val/test DataLoaders (automatically calls `create_feature_vectors()` if needed)
+- `fit_scalers()` - Fit feature scalers on training data (for normalization)
+
+### Feature Scaling/Normalization
+
+The data pipeline includes **automatic feature normalization** using z-score (standardization) to handle features with different scales (e.g., UPDRS scores 0-132 vs. percentages 0-1 vs. age 30-80).
+
+**How it works:**
+- **FeatureScaler** class performs z-score normalization: `normalized = (value - mean) / std`
+- Separate scalers are used for each modality: static, motor, UPDRS supplementary, non-motor, medication
+- Scalers are **fitted on training data only** to prevent data leakage
+- Missing values are handled correctly: only observed values are used for computing statistics, and missing values remain as 0 (with mask=1)
+
+**Usage:**
+```python
+from data.data_integrator import DataIntegrator
+
+# Enable normalization (default: True)
+integrator = DataIntegrator(config, normalize_features=True)
+
+# Prepare data (scalers will be fitted automatically on training split)
+prepared_data = integrator.prepare_final_dataset()
+train_loader, val_loader, test_loader = integrator.create_dataloaders(prepared_data, config)
+
+# For k-fold CV, scalers are fitted per fold on training fold data only
+# This is handled automatically by create_kfold_dataloaders()
+```
+
+**Disabling normalization:**
+```python
+# If you want raw feature values (not recommended for most cases)
+integrator = DataIntegrator(config, normalize_features=False)
+```
+
+**Why normalize?**
+- Features have very different scales (UPDRS scores: 0-132, LEDD: 0-2000, age: 30-90, percentages: 0-1)
+- Neural networks train better with normalized features (stable gradients, faster convergence)
+- Without normalization, large-scale features can dominate learning
 
 ### Running the Data Pipeline
 
@@ -525,7 +578,7 @@ python data_integrator.py
 data/processed/
 ├── static_data.csv         # Patient-level features (PATNO + genetics + demographics)
 ├── longitudinal_data.csv   # Visit-level features (PATNO, EVENT_ID, months_since_baseline + all assessments)
-└── slopes_data.csv         # Progression slopes (PATNO + NP1TOT_slope, NP2TOT_slope, etc.)
+└── slopes_data.csv         # Progression slopes (PATNO + NP1RTOT_slope, NP2PTOT_slope, etc.)
 ```
 
 ### Complete Pipeline Flow
@@ -643,7 +696,9 @@ prepared_data = integrator.prepare_final_dataset()
 
 # Option 2: Convert directly to dataset format (with missing value handling)
 feature_vectors = integrator.create_feature_vectors(prepared_data)
-# Returns: {'static_data': Dict[PATNO, {...}], 'longitudinal_data': Dict[PATNO, [...]], 'slopes': Dict[PATNO, float]}
+# Returns: {'static_data': Dict[PATNO, {...}], 'longitudinal_data': Dict[PATNO, [...]], 'slopes': Dict[PATNO, Dict[str, float]]}
+# Note: slopes dict contains all computed slopes per patient (NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope)
+#       but model predicts one slope per patient (default: NP3TOT_slope)
 
 # Option 3: Auto-convert (calls prepare_final_dataset internally)
 feature_vectors = integrator.create_feature_vectors()
@@ -716,17 +771,24 @@ time_encoding = SinusoidalEncoding(months_since_baseline)
 **Next-Visit Head:**
 - Input: Hidden state at time t
 - Output: Predicted UPDRS totals at t+1
-  - NP1TOT (non-motor experiences, 0-52)
-  - NP2TOT (motor ADL, 0-52)
+  - NP1RTOT (non-motor experiences, 0-52)
+  - NP2PTOT (motor ADL, 0-52)
   - NP3TOT (motor examination, 0-132)
   - NP4TOT (motor complications, 0-24)
 - Loss: MSE (summed across all totals)
 
 **Slope Head:**
 - Input: Pooled sequence representation
-- Output: Patient-level progression slopes for each UPDRS total
-- Target: Empirical slopes computed from ≥3 visits (linear regression per total)
-- Loss: MSE (summed across all totals)
+- Output: One patient-level progression slope per patient (single scalar value)
+- Target: Empirical slope computed from ≥3 visits using linear regression
+  - **Default target**: `NP3TOT_slope` (primary motor progression, most clinically relevant)
+  - Falls back to any available slope if NP3TOT_slope is missing
+- Loss: MSE on the single slope prediction
+
+**Note on Slope Computation:**
+- During data preparation, slopes are computed for **all UPDRS totals** (NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope) and stored per patient
+- However, the model is trained to predict **one slope per patient** (defaulting to NP3TOT_slope)
+- This focuses the model on the most clinically important motor progression metric (NP3TOT)
 
 ---
 
@@ -771,15 +833,76 @@ trainer = V1Trainer(
 trainer.train(max_epochs=100, early_stopping_patience=15)
 ```
 
+### K-Fold Cross-Validation
+
+The project supports **k-fold cross-validation** for robust model evaluation. This is especially useful for small datasets where a single train/val/test split might not be reliable.
+
+**Key Features:**
+- Proper scaler fitting per fold (fitted on training fold, applied to validation fold)
+- Automatic patient splitting into k folds
+- Optional held-out test set (separate from CV folds)
+- Average performance metrics across folds
+
+**Usage:**
+
+```python
+from models.v1_model import V1MultimodalTransformer
+from training.train import V1Trainer
+from training.train_kfold import train_kfold
+from training.config import get_default_config
+from data.data_integrator import DataIntegrator
+from data.dataset import create_kfold_dataloaders
+
+config = get_default_config()
+
+# Option 1: Use the convenience function (recommended)
+results = train_kfold(
+    config=config,
+    n_splits=5,        # 5-fold CV
+    n_epochs=50,       # Epochs per fold
+    device='cuda'
+)
+
+# Option 2: Manual setup for more control
+integrator = DataIntegrator(config, normalize_features=True)
+prepared_data = integrator.prepare_final_dataset()
+
+# Create k-fold dataloaders (automatically handles scaler fitting per fold)
+fold_dataloaders, test_loader = create_kfold_dataloaders(
+    prepared_data=prepared_data,
+    config=config,
+    n_splits=5,
+    test_ratio=0.2,    # Hold out 20% as test set
+    random_seed=42
+)
+
+# Train on each fold
+for fold_idx, (train_loader, val_loader) in enumerate(fold_dataloaders):
+    model = V1MultimodalTransformer(config)
+    trainer = V1Trainer(model, config, train_loader, val_loader, device='cuda')
+    trainer.train(max_epochs=50, early_stopping_patience=15)
+    
+    # Evaluate on validation fold
+    val_metrics = trainer.validate()
+    print(f"Fold {fold_idx + 1} Val Loss: {val_metrics['loss']:.4f}")
+```
+
+**Important Notes:**
+- Scalers are fitted **per fold** on the training fold data only
+- Test set is held out completely and scalers are fitted on all CV data (not test data) before applying to test set
+- Each fold trains an independent model (you get k models)
+- Use average metrics across folds to assess model performance
+- For final evaluation, retrain on all training data (all folds combined) and evaluate on held-out test set
+
 ### Expected Performance
 
 | Metric | Target | Interpretation |
 |--------|--------|----------------|
 | Next-visit MAE | < 5 points | On NP3TOT (primary motor outcome, 0-132 scale) |
-| Next-visit MAE | < 3 points | On NP1TOT, NP2TOT (0-52 scale) |
+| Next-visit MAE | < 3 points | On NP1RTOT, NP2PTOT (0-52 scale) |
 | Next-visit MAE | < 2 points | On NP4TOT (0-24 scale) |
 | Slope correlation | r > 0.5 | With empirical slopes (NP3TOT most important) |
-| ON vs OFF gap | 5-10 points | NP3TOT medication effect (NP2TOT also shows effect) |
+| ON vs OFF gap | 5-10 points | NP3TOT medication effect (NP2PTOT also shows effect) |
 
 ---
 
@@ -796,8 +919,8 @@ class FeatureConfig:
     static_features: List[str]      # Genetics + demographics
     
     # UPDRS by part
-    part1_features: List[str]       # Non-motor (+ NP1TOT)
-    part2_features: List[str]       # Motor ADL (+ NP2TOT)
+    part1_features: List[str]       # Non-motor (+ NP1RTOT)
+    part2_features: List[str]       # Motor ADL (+ NP2PTOT)
     part3_features: List[str]       # Motor exam (+ NP3TOT)
     part4_features: List[str]       # Complications (+ NP4TOT)
     
@@ -816,7 +939,7 @@ class ModelConfig:
     n_layers: int = 4
     dropout: float = 0.1
     max_seq_len: int = 20
-    predict_totals: List[str] = ['NP1TOT', 'NP2TOT', 'NP3TOT', 'NP4TOT']  # All UPDRS totals
+    predict_totals: List[str] = ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']  # All UPDRS totals
 ```
 
 ### Data Configuration
@@ -836,8 +959,8 @@ The MDS-UPDRS has **4 parts**, each with its own total score:
 
 | Part | Code | Total | Range | What It Measures |
 |------|------|-------|-------|------------------|
-| I | NP1* | NP1TOT | 0-52 | Non-motor experiences |
-| II | NP2* | NP2TOT | 0-52 | Motor ADL (patient-reported) |
+| I | NP1* | NP1RTOT | 0-52 | Non-motor experiences |
+| II | NP2* | NP2PTOT | 0-52 | Motor ADL (patient-reported) |
 | III | NP3* | NP3TOT | 0-132 | Motor examination (clinician) |
 | IV | NP4* | NP4TOT | 0-24 | Motor complications |
 
@@ -845,16 +968,16 @@ The MDS-UPDRS has **4 parts**, each with its own total score:
 
 | Part | ON vs OFF Difference | Notes |
 |------|---------------------|-------|
-| Part I (NP1TOT) | Minimal (~0-2 pts) | Non-dopaminergic symptoms |
-| Part II (NP2TOT) | Moderate (~5-10 pts) | Patient-reported motor ADL |
+| Part I (NP1RTOT) | Minimal (~0-2 pts) | Non-dopaminergic symptoms |
+| Part II (NP2PTOT) | Moderate (~5-10 pts) | Patient-reported motor ADL |
 | Part III (NP3TOT) | **Large (~10-20 pts)** | Main progression outcome, clinician-observed |
 | Part IV (NP4TOT) | N/A | These ARE medication complications |
 
 ### V1 Implementation
 
 V1 predicts **all four UPDRS totals**:
-- **NP1TOT**: Non-motor experiences (baseline + progression)
-- **NP2TOT**: Motor activities of daily living (patient perspective)
+- **NP1RTOT**: Non-motor experiences (baseline + progression)
+- **NP2PTOT**: Motor activities of daily living (patient perspective)
 - **NP3TOT**: Motor examination (primary outcome, clinician-observed)
 - **NP4TOT**: Motor complications (medication-related)
 

@@ -1,5 +1,7 @@
+# cd pds22025/git/pdS22025/Experiment/V1_implementation/
 # Terminal 1: Train all modalities configuration
-nohup python -m training.main \
+# Using python -u for unbuffered output so logs appear immediately
+nohup python -u -m training.main \
   --mode multi_modal \
   --modalities all \
   --num-workers 8 \
@@ -10,7 +12,7 @@ nohup python -m training.main \
   > train_all.log 2>&1 &
 
 # Terminal 2: Train static+motor
-nohup python -m training.main \
+nohup python -u -m training.main \
   --mode multi_modal \
   --modalities static+motor \
   --num-workers 8 \
@@ -21,7 +23,7 @@ nohup python -m training.main \
   > train_static+motor.log 2>&1 &
 
 # Terminal 3: Train motor_only
-nohup python -m training.main \
+nohup python -u -m training.main \
   --mode multi_modal \
   --modalities motor_only \
   --num-workers 8 \
@@ -32,7 +34,7 @@ nohup python -m training.main \
   > train_motor_only.log 2>&1 &
 
 # Terminal 4: Train static_only
-nohup python -m training.main \
+nohup python -u -m training.main \
   --mode multi_modal \
   --modalities static_only \
   --num-workers 8 \
@@ -43,7 +45,7 @@ nohup python -m training.main \
   > train_static_only.log 2>&1 &
 
 # Terminal 5: Train static+nonmotor
-nohup python -m training.main \
+nohup python -u -m training.main \
   --mode multi_modal \
   --modalities static+nonmotor \
   --num-workers 8 \

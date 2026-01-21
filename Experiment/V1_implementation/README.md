@@ -260,6 +260,8 @@ class DataConfig:
 
 ### 5. Test Components
 
+Each components have according test files. Run test to understand component behavior.
+
 ```bash
 cd V1_implementation
 
@@ -270,16 +272,7 @@ python training/config.py
 python models/v1_model.py
 ```
 
-### 6. Prepare Data
-
-Data loading is modularized into 5 independent tasks (see [Data Pipeline](#data-pipeline)):
-
-```bash
-cd data
-python data_integrator.py
-```
-
-### 7. Train Model
+### 6. Train Model
 
 **Standard training:**
 ```bash
@@ -376,6 +369,7 @@ visit_index = builder.build_from_sources(
 ```
 
 **visit_index columns:**
+
 | Column | Description |
 |--------|-------------|
 | `PATNO` | Patient ID |
@@ -384,6 +378,7 @@ visit_index = builder.build_from_sources(
 | `months_since_baseline` | Continuous time since baseline |
 | `visit_order` | Integer (0, 1, 2, ...) within patient |
 | `delta_months` | Time gap from previous visit |
+
 
 **Key insight**: The visit_index is the UNION of all visit anchors across all sources, then filtered and sorted. This means:
 - If a patient has a medication visit but no UPDRS that day, the visit still exists

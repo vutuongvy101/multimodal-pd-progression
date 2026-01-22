@@ -621,6 +621,13 @@ class DataIntegrator:
             non_motor_cols = [c for c in non_motor_features if c in longitudinal_df.columns]
             med_cols = [c for c in medication_features if c in longitudinal_df.columns]
             
+            # Get age_at_visit columns
+            age_at_visit_features = getattr(self.config.features, 'age_at_visit_features', [])
+            if isinstance(age_at_visit_features, (list, tuple, set)) and age_at_visit_features:
+                age_at_visit_cols = [c for c in age_at_visit_features if c in longitudinal_df.columns]
+            else:
+                age_at_visit_cols = []
+            
             # Pre-compute event order mapping (used for sorting visits)
             event_order = {'SC': 0, 'BL': 0}
             for i in range(1, 26):
@@ -691,6 +698,17 @@ class DataIntegrator:
                     all_med_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
                     all_med_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
                 
+                # Age at visit features - process all visits at once
+                if age_at_visit_cols:
+                    all_age_at_visit_values, all_age_at_visit_masks = self.create_missingness_masks(
+                        group,
+                        age_at_visit_cols,
+                        scaler=self.age_at_visit_scaler
+                    )
+                else:
+                    all_age_at_visit_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                    all_age_at_visit_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                
                 # Extract time information for all visits (vectorized)
                 if 'months_since_baseline' in group.columns:
                     time_months_arr = group['months_since_baseline'].fillna(0.0).astype(float).values
@@ -711,10 +729,12 @@ class DataIntegrator:
                         'motor_mask': all_motor_masks[visit_idx],
                         'updrs_supplementary_values': all_updrs_supplementary_values[visit_idx],
                         'updrs_supplementary_mask': all_updrs_supplementary_masks[visit_idx],
-                        'non_motor_values': all_non_motor_values[visit_idx],
-                        'non_motor_mask': all_non_motor_masks[visit_idx],
+                        'nonmotor_values': all_non_motor_values[visit_idx],  # Changed from 'non_motor_values' to match dataset
+                        'nonmotor_mask': all_non_motor_masks[visit_idx],  # Changed from 'non_motor_mask' to match dataset
                         'med_values': all_med_values[visit_idx],
                         'med_mask': all_med_masks[visit_idx],
+                        'age_at_visit_values': all_age_at_visit_values[visit_idx],
+                        'age_at_visit_mask': all_age_at_visit_masks[visit_idx],
                         'time_months': float(time_months_arr[visit_idx]),
                         'updrs_totals': updrs_totals_arr[visit_idx].copy(),
                         'np3tot': float(updrs_totals_arr[visit_idx, 2]) if len(updrs_totals) > 2 and not np.isnan(updrs_totals_arr[visit_idx, 2]) else np.nan
@@ -966,11 +986,11 @@ class DataIntegrator:
                 non_motor_visit = non_motor_df[(non_motor_df['PATNO'] == patno) & (non_motor_df['EVENT_ID'] == event_id)] if len(non_motor_df) > 0 else pd.DataFrame()
                 if len(non_motor_visit) > 0 and non_motor_cols:
                     non_motor_values, non_motor_mask = self.create_missingness_masks(non_motor_visit, non_motor_cols, scaler=self.non_motor_scaler)
-                    visit_dict['non_motor_values'] = non_motor_values[0]
-                    visit_dict['non_motor_mask'] = non_motor_mask[0]
+                    visit_dict['nonmotor_values'] = non_motor_values[0]  # Changed from 'non_motor_values' to match dataset
+                    visit_dict['nonmotor_mask'] = non_motor_mask[0]  # Changed from 'non_motor_mask' to match dataset
                 else:
-                    visit_dict['non_motor_values'] = np.zeros(len(non_motor_cols) if non_motor_cols else 0, dtype=np.float32)
-                    visit_dict['non_motor_mask'] = np.ones(len(non_motor_cols) if non_motor_cols else 0, dtype=np.float32)
+                    visit_dict['nonmotor_values'] = np.zeros(len(non_motor_cols) if non_motor_cols else 0, dtype=np.float32)  # Changed from 'non_motor_values' to match dataset
+                    visit_dict['nonmotor_mask'] = np.ones(len(non_motor_cols) if non_motor_cols else 0, dtype=np.float32)  # Changed from 'non_motor_mask' to match dataset
                 
                 # Medication features
                 med_visit = medication_df[(medication_df['PATNO'] == patno) & (medication_df['EVENT_ID'] == event_id)] if len(medication_df) > 0 else pd.DataFrame()

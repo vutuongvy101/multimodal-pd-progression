@@ -974,10 +974,11 @@ models/checkpoints/
 │   ├── fold_1/
 │   ├── fold_2/
 │   ├── kfold_results.json
+│   ├── training_summary.json  # Summary for this modality config
 │   └── MODALITY_TRAINING_COMPLETE.json
 ├── modalities_static+motor/
+│   ├── training_summary.json  # Summary for this modality config
 │   └── ...
-├── multi_modal_training_summary.json  # Comparison across all configs
 └── ...
 ```
 
@@ -1011,8 +1012,9 @@ python -m training.main \
   --mode multi_modal \
   --modalities all static+motor static+nonmotor motor_only static_only
 
-# Step 2: Review comparison in models/checkpoints/multi_modal_training_summary.json
-# Step 3: Identify best modality combination
+# Step 2: Review summaries in each modality folder (e.g., models/checkpoints/modalities_motor_only/training_summary.json)
+# Step 3: Use aggregate_summaries() method to compare all results, or manually review each folder
+# Step 4: Identify best modality combination
 # Step 4: Train final model with best configuration
 python -m training.main \
   --mode kfold \

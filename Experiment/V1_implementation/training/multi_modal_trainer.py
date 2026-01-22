@@ -237,8 +237,10 @@ class MultiModalTrainer:
         try:
             results = kfold_trainer.train(save_fold_checkpoints=True)
             
+            save_dir = self.get_save_dir(modalities)
+            
             # Mark as complete
-            completion_file = self.get_save_dir(modalities) / "MODALITY_TRAINING_COMPLETE.json"
+            completion_file = save_dir / "MODALITY_TRAINING_COMPLETE.json"
             completion_data = {
                 'modalities': modalities,
                 'modality_key': modality_key,
@@ -250,6 +252,19 @@ class MultiModalTrainer:
             with open(completion_file, 'w') as f:
                 json.dump(completion_data, f, indent=2)
             
+            # Save summary in modality's dedicated folder
+            summary_file = save_dir / "training_summary.json"
+            summary_data = {
+                'modalities': modalities,
+                'modality_key': modality_key,
+                'status': 'completed',
+                'n_splits': self.n_splits,
+                'test_ratio': self.test_ratio,
+                'results': results
+            }
+            with open(summary_file, 'w') as f:
+                json.dump(summary_data, f, indent=2, default=str)
+            
             return {
                 'modalities': modalities,
                 'modality_key': modality_key,
@@ -259,8 +274,10 @@ class MultiModalTrainer:
         except Exception as e:
             print(f"\n✗ Training failed for {modality_key}: {e}")
             
+            save_dir = self.get_save_dir(modalities)
+            
             # Mark as failed
-            completion_file = self.get_save_dir(modalities) / "MODALITY_TRAINING_COMPLETE.json"
+            completion_file = save_dir / "MODALITY_TRAINING_COMPLETE.json"
             completion_data = {
                 'modalities': modalities,
                 'modality_key': modality_key,
@@ -269,6 +286,18 @@ class MultiModalTrainer:
             }
             with open(completion_file, 'w') as f:
                 json.dump(completion_data, f, indent=2)
+            
+            # Save summary in modality's dedicated folder
+            summary_file = save_dir / "training_summary.json"
+            summary_data = {
+                'modalities': modalities,
+                'modality_key': modality_key,
+                'status': 'failed',
+                'error': str(e),
+                'results': None
+            }
+            with open(summary_file, 'w') as f:
+                json.dump(summary_data, f, indent=2, default=str)
             
             return {
                 'modalities': modalities,
@@ -314,8 +343,9 @@ class MultiModalTrainer:
             print(f"\n[{i}/{len(modality_configs)}] ", end="")
             result = self.train_modality_config(modalities, force_retrain=force_retrain)
             all_results[result['modality_key']] = result
+            # Summary is already saved in each modality's folder by train_modality_config
         
-        # Save summary
+        # Print summary
         summary = {
             'total_configs': len(modality_configs),
             'completed': sum(1 for r in all_results.values() if r['status'] == 'completed'),
@@ -323,12 +353,6 @@ class MultiModalTrainer:
             'failed': sum(1 for r in all_results.values() if r['status'] == 'failed'),
             'results': all_results
         }
-        
-        summary_file = self.base_save_dir / "multi_modal_training_summary.json"
-        with open(summary_file, 'w') as f:
-            json.dump(summary, f, indent=2, default=str)
-        
-        # Print summary
         self._print_summary(summary)
         
         self.training_results = all_results
@@ -362,8 +386,60 @@ class MultiModalTrainer:
                     print(f"      Val Loss: {mean_val:.4f} ± {std_val:.4f}")
         
         print("\n" + "=" * 80)
-        print(f"Summary saved to: {self.base_save_dir / 'multi_modal_training_summary.json'}")
+        print("Summary files saved in each modality's folder:")
+        for key, result in summary['results'].items():
+            save_dir = self.get_save_dir(result['modalities'])
+            print(f"  {key}: {save_dir / 'training_summary.json'}")
         print("=" * 80)
+    
+    def aggregate_summaries(self) -> Dict:
+        """
+        Aggregate training summaries from all modality folders.
+        Useful for reading results after async training.
+        
+        Returns:
+            Dictionary with aggregated summary data
+        """
+        aggregated = {
+            'total_configs': 0,
+            'completed': 0,
+            'skipped': 0,
+            'failed': 0,
+            'results': {}
+        }
+        
+        # Find all modality directories
+        for modality_dir in self.base_save_dir.glob("modalities_*"):
+            if not modality_dir.is_dir():
+                continue
+            
+            summary_file = modality_dir / "training_summary.json"
+            if not summary_file.exists():
+                continue
+            
+            try:
+                with open(summary_file, 'r') as f:
+                    summary_data = json.load(f)
+                    
+                modality_key = summary_data.get('modality_key', modality_dir.name)
+                status = summary_data.get('status', 'unknown')
+                
+                aggregated['results'][modality_key] = summary_data
+                
+                if status == 'completed':
+                    aggregated['completed'] += 1
+                elif status == 'skipped':
+                    aggregated['skipped'] += 1
+                elif status == 'failed':
+                    aggregated['failed'] += 1
+                
+                aggregated['total_configs'] += 1
+                
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"Warning: Could not read summary from {summary_file}: {e}")
+                continue
+        
+        return aggregated
     
     def compare_results(self) -> Dict:
         """

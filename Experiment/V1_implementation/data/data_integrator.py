@@ -641,83 +641,84 @@ class DataIntegrator:
                     group['_visit_order'] = group['EVENT_ID'].map(lambda x: event_order.get(x, 999))
                     group = group.sort_values('_visit_order').drop(columns=['_visit_order'])
                 
+                n_visits = len(group)
                 visits = []
-                for _, visit_row in group.iterrows():
-                    visit_dict = {}
-                    
-                    # Motor features
-                    if motor_cols:
-                        motor_values, motor_mask = self.create_missingness_masks(
-                            pd.DataFrame([visit_row]),
-                            motor_cols,
-                            scaler=self.motor_scaler
-                        )
-                        visit_dict['motor_values'] = motor_values[0]
-                        visit_dict['motor_mask'] = motor_mask[0]
-                    else:
-                        visit_dict['motor_values'] = np.array([])
-                        visit_dict['motor_mask'] = np.array([])
-                    
-                    # UPDRS supplementary features
-                    if updrs_supplementary_cols:
-                        updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
-                            pd.DataFrame([visit_row]),
-                            updrs_supplementary_cols,
-                            scaler=self.updrs_supplementary_scaler
-                        )
-                        visit_dict['updrs_supplementary_values'] = updrs_supplementary_values[0]
-                        visit_dict['updrs_supplementary_mask'] = updrs_supplementary_mask[0]
-                    else:
-                        visit_dict['updrs_supplementary_values'] = np.array([])
-                        visit_dict['updrs_supplementary_mask'] = np.array([])
-                    
-                    # Non-motor features
-                    if non_motor_cols:
-                        non_motor_values, non_motor_mask = self.create_missingness_masks(
-                            pd.DataFrame([visit_row]),
-                            non_motor_cols,
-                            scaler=self.non_motor_scaler
-                        )
-                        visit_dict['non_motor_values'] = non_motor_values[0]
-                        visit_dict['non_motor_mask'] = non_motor_mask[0]
-                    else:
-                        visit_dict['non_motor_values'] = np.array([])
-                        visit_dict['non_motor_mask'] = np.array([])
-                    
-                    # Medication features
-                    if med_cols:
-                        med_values, med_mask = self.create_missingness_masks(
-                            pd.DataFrame([visit_row]),
-                            med_cols,
-                            scaler=self.medication_scaler
-                        )
-                        visit_dict['med_values'] = med_values[0]
-                        visit_dict['med_mask'] = med_mask[0]
-                    else:
-                        visit_dict['med_values'] = np.array([])
-                        visit_dict['med_mask'] = np.array([])
-                    
-                    # Time information
-                    if 'months_since_baseline' in visit_row:
-                        visit_dict['time_months'] = float(visit_row['months_since_baseline']) if pd.notna(visit_row['months_since_baseline']) else 0.0
-                    else:
-                        visit_dict['time_months'] = 0.0
-                    
-                    # UPDRS totals (targets for next-visit prediction)
-                    updrs_totals = self.config.features.all_updrs_totals
-                    updrs_values = []
-                    for total in updrs_totals:
-                        if total in visit_row:
-                            val = float(visit_row[total]) if pd.notna(visit_row[total]) else np.nan
-                        else:
-                            val = np.nan
-                        updrs_values.append(val)
-                    # Array of UPDRS totals: [NP1RTOT, NP2PTOT, NP3TOT, NP4TOT] from all_updrs_totals
-                    visit_dict['updrs_totals'] = np.array(updrs_values)  # [4]
-                    
-                    # Keep np3tot for backward compatibility (single value)
-                    visit_dict['np3tot'] = updrs_values[2] if len(updrs_values) > 2 else np.nan
-                    
+                
+                # OPTIMIZATION: Process all visits at once for each feature type (vectorized)
+                # This is much faster than processing visits one-by-one
+                
+                # Motor features - process all visits at once
+                if motor_cols:
+                    all_motor_values, all_motor_masks = self.create_missingness_masks(
+                        group,  # Process entire group DataFrame at once
+                        motor_cols,
+                        scaler=self.motor_scaler
+                    )
+                else:
+                    all_motor_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                    all_motor_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                
+                # UPDRS supplementary features - process all visits at once
+                if updrs_supplementary_cols:
+                    all_updrs_supplementary_values, all_updrs_supplementary_masks = self.create_missingness_masks(
+                        group,
+                        updrs_supplementary_cols,
+                        scaler=self.updrs_supplementary_scaler
+                    )
+                else:
+                    all_updrs_supplementary_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                    all_updrs_supplementary_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                
+                # Non-motor features - process all visits at once
+                if non_motor_cols:
+                    all_non_motor_values, all_non_motor_masks = self.create_missingness_masks(
+                        group,
+                        non_motor_cols,
+                        scaler=self.non_motor_scaler
+                    )
+                else:
+                    all_non_motor_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                    all_non_motor_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                
+                # Medication features - process all visits at once
+                if med_cols:
+                    all_med_values, all_med_masks = self.create_missingness_masks(
+                        group,
+                        med_cols,
+                        scaler=self.medication_scaler
+                    )
+                else:
+                    all_med_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                    all_med_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
+                
+                # Extract time information for all visits (vectorized)
+                if 'months_since_baseline' in group.columns:
+                    time_months_arr = group['months_since_baseline'].fillna(0.0).astype(float).values
+                else:
+                    time_months_arr = np.zeros(n_visits, dtype=float)
+                
+                # Extract UPDRS totals for all visits at once (vectorized)
+                updrs_totals = self.config.features.all_updrs_totals
+                updrs_totals_arr = np.full((n_visits, len(updrs_totals)), np.nan, dtype=float)
+                for j, total in enumerate(updrs_totals):
+                    if total in group.columns:
+                        updrs_totals_arr[:, j] = pd.to_numeric(group[total], errors='coerce').values
+                
+                # Now split into individual visit dictionaries
+                for visit_idx in range(n_visits):
+                    visit_dict = {
+                        'motor_values': all_motor_values[visit_idx],
+                        'motor_mask': all_motor_masks[visit_idx],
+                        'updrs_supplementary_values': all_updrs_supplementary_values[visit_idx],
+                        'updrs_supplementary_mask': all_updrs_supplementary_masks[visit_idx],
+                        'non_motor_values': all_non_motor_values[visit_idx],
+                        'non_motor_mask': all_non_motor_masks[visit_idx],
+                        'med_values': all_med_values[visit_idx],
+                        'med_mask': all_med_masks[visit_idx],
+                        'time_months': float(time_months_arr[visit_idx]),
+                        'updrs_totals': updrs_totals_arr[visit_idx].copy(),
+                        'np3tot': float(updrs_totals_arr[visit_idx, 2]) if len(updrs_totals) > 2 and not np.isnan(updrs_totals_arr[visit_idx, 2]) else np.nan
+                    }
                     visits.append(visit_dict)
                 
                 longitudinal_data[patno] = visits

@@ -1,0 +1,73 @@
+{
+  "modalities": [
+    "static",
+    "motor",
+    "non_motor",
+    "medication",
+    "age_at_visit"
+  ],
+  "modality_key": "age_at_visit+medication+motor+non_motor+static",
+  "status": "completed",
+  "n_splits": 5,
+  "test_ratio": 0.2,
+  "results": {
+    "fold_results": [
+      {
+        "fold": 1,
+        "best_val_loss": 34.99705279957164,
+        "val_loss": 34.99705279957164,
+        "val_loss_next_visit": 34.97885600003329,
+        "val_loss_slope": 0.09098279950293628,
+        "best_epoch": 69,
+        "n_epochs_trained": 70
+      },
+      {
+        "fold": 2,
+        "best_val_loss": 32.54289505698464,
+        "val_loss": 32.54289505698464,
+        "val_loss_next_visit": 32.53106013211337,
+        "val_loss_slope": 0.05917654423551126,
+        "best_epoch": 69,
+        "n_epochs_trained": 70
+      },
+      {
+        "fold": 3,
+        "best_val_loss": 35.477792739868164,
+        "val_loss": 35.477792739868164,
+        "val_loss_next_visit": 35.46347028558905,
+        "val_loss_slope": 0.07161250185560096,
+        "best_epoch": 69,
+        "n_epochs_trained": 70
+      },
+      {
+        "fold": 4,
+        "best_val_loss": 26.12593581459739,
+        "val_loss": 26.12593581459739,
+        "val_loss_next_visit": 26.10261396928267,
+        "val_loss_slope": 0.11660913039337505,
+        "best_epoch": 69,
+        "n_epochs_trained": 70
+      },
+      {
+        "fold": 5,
+        "best_val_loss": 28.37805531241677,
+        "val_loss": 28.37805531241677,
+        "val_loss_next_visit": 28.363904172723945,
+        "val_loss_slope": 0.07075852782211521,
+        "best_epoch": 69,
+        "n_epochs_trained": 70
+      }
+    ],
+    "summary": {
+      "mean_val_loss": 31.504343032836914,
+      "std_val_loss": 4.116030216217041,
+      "mean_val_next_visit": 31.487979888916016,
+      "std_val_next_visit": 4.118275165557861,
+      "mean_val_slope": 0.08182790130376816,
+      "std_val_slope": 0.02254725992679596,
+      "mean_best_val_loss": 31.504343032836914,
+      "std_best_val_loss": 4.116030216217041
+    },
+    "test_loader": "<torch.utils.data.dataloader.DataLoader object at 0x72cf6754fa50>"
+  }
+}

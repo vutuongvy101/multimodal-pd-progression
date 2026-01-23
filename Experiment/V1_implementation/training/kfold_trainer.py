@@ -72,6 +72,87 @@ class KFoldTrainer:
         
         return fold_dataloaders, test_loader
     
+    def _create_fold_trainer(
+        self,
+        fold_idx: int,
+        model: V1MultimodalTransformer,
+        train_loader: DataLoader,
+        val_loader: DataLoader
+    ) -> V1Trainer:
+        """
+        Create a V1Trainer instance for a specific fold.
+        
+        Args:
+            fold_idx: Index of the fold (0-indexed)
+            model: Model instance for this fold
+            train_loader: Training dataloader for this fold
+            val_loader: Validation dataloader for this fold
+            
+        Returns:
+            V1Trainer instance configured for this fold
+        """
+        trainer = V1Trainer(
+            model=model,
+            config=self.config,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            device=self.device
+        )
+        
+        # Update save directory to fold-specific directory
+        fold_save_dir = self.save_dir / f"fold_{fold_idx + 1}"
+        fold_save_dir.mkdir(parents=True, exist_ok=True)
+        trainer.save_dir = fold_save_dir
+        
+        return trainer
+    
+    def _extract_fold_results(
+        self,
+        fold_idx: int,
+        trainer: V1Trainer,
+        val_metrics: Dict[str, float]
+    ) -> Dict[str, float]:
+        """
+        Extract fold results from trainer and validation metrics.
+        
+        Args:
+            fold_idx: Index of the fold (0-indexed)
+            trainer: Trained V1Trainer instance
+            val_metrics: Validation metrics dictionary
+            
+        Returns:
+            Dictionary with fold results
+        """
+        return {
+            'fold': fold_idx + 1,
+            'val_loss': val_metrics['loss'],
+            'val_loss_next_visit': val_metrics['loss_next_visit'],
+            'val_loss_slope': val_metrics['loss_slope'],
+            'best_val_loss': trainer.best_val_loss,
+            'best_epoch': trainer.best_epoch
+        }
+    
+    def _print_fold_results(
+        self,
+        fold_idx: int,
+        trainer: V1Trainer,
+        val_metrics: Dict[str, float]
+    ):
+        """
+        Print fold training results.
+        
+        Args:
+            fold_idx: Index of the fold (0-indexed)
+            trainer: Trained V1Trainer instance
+            val_metrics: Validation metrics dictionary
+        """
+        print(f"\nFold {fold_idx + 1} Results:")
+        print(f"  Final Val Loss: {val_metrics['loss']:.4f}")
+        print(f"    - Next Visit: {val_metrics['loss_next_visit']:.4f}")
+        print(f"    - Slope: {val_metrics['loss_slope']:.4f}")
+        print(f"  Best Val Loss: {trainer.best_val_loss:.4f} (epoch {trainer.best_epoch})")
+        print(f"  Total Epochs: {len(trainer.training_history['train_loss'])}")
+    
     def train_fold(
         self,
         fold_idx: int,
@@ -105,8 +186,6 @@ class KFoldTrainer:
         val_metrics = trainer.validate()
         
         if save_fold_checkpoint:
-            fold_save_dir = self.save_dir / f"fold_{fold_idx + 1}"
-            fold_save_dir.mkdir(parents=True, exist_ok=True)
             trainer.save_checkpoint(is_best=True)
         
         fold_result = self._extract_fold_results(fold_idx, trainer, val_metrics)

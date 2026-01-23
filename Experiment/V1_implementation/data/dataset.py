@@ -426,7 +426,8 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=num_workers
+        num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False
     )
     
     val_loader = DataLoader(
@@ -434,7 +435,8 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=num_workers
+        num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False
     )
     
     test_loader = DataLoader(
@@ -442,7 +444,8 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=num_workers
+        num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False
     )
     
     print("  ✓ Dataloaders created successfully")
@@ -569,7 +572,8 @@ def create_kfold_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=num_workers
+        num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False
     )
     
     print(f"  ✓ Test loader created: {len(test_ids)} patients")
@@ -640,7 +644,8 @@ def create_kfold_dataloaders(
             batch_size=batch_size,
             shuffle=True,
             collate_fn=collate_fn,
-            num_workers=num_workers
+            num_workers=num_workers,
+            persistent_workers=True if num_workers > 0 else False
         )
         
         val_loader = DataLoader(
@@ -648,7 +653,8 @@ def create_kfold_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             collate_fn=collate_fn,
-            num_workers=num_workers
+            num_workers=num_workers,
+            persistent_workers=True if num_workers > 0 else False
         )
         
         fold_dataloaders.append((train_loader, val_loader))

@@ -34,16 +34,16 @@ class TestHeadsSmoke:
         assert torch.isfinite(next_visit_preds).all()
 
         for pooling in ["mean", "last", "max"]:
-            slope_head = ProgressionSlopeHead(d_model, [128, 64], pooling=pooling)
+            slope_head = ProgressionSlopeHead(d_model, n_targets=n_targets, hidden_dims=[128, 64], pooling=pooling)
             slope_preds = slope_head(hidden_states, attention_mask)
 
-            assert slope_preds.shape == (batch_size,)
+            assert slope_preds.shape == (batch_size, n_targets)
             assert torch.isfinite(slope_preds).all()
 
         multi_head = MultiTaskHead(d_model, n_targets, [128, 64], [128, 64], pooling="mean")
         outputs = multi_head(hidden_states, attention_mask)
 
         assert outputs["next_visit"].shape == (batch_size, seq_len, n_targets)
-        assert outputs["slope"].shape == (batch_size,)
+        assert outputs["slope"].shape == (batch_size, n_targets)
         assert torch.isfinite(outputs["next_visit"]).all()
         assert torch.isfinite(outputs["slope"]).all()

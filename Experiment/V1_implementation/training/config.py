@@ -273,13 +273,13 @@ class ModelConfig:
     """Configuration for V1 model architecture"""
 
     # Embedding dimensions
-    d_model: int = 256
+    d_model: int = 512  # Increased from 256 for wider model
 
     # Transformer architecture
-    n_heads: int = 8
-    n_layers: int = 4
-    dropout: float = 0.1
-    dim_feedforward: int = 1024
+    n_heads: int = 16  # Increased from 8 for more attention heads
+    n_layers: int = 6  # Increased from 4 for deeper model
+    dropout: float = 0.15  # Slightly increased from 0.1 for better regularization
+    dim_feedforward: int = 2048  # Increased from 1024 for wider feedforward
     activation: str = 'gelu' # this is told better than RELU in Transformer
 
     # Modality selection: which modalities to include in the model
@@ -369,8 +369,8 @@ class ModelConfig:
     predict_totals: List[str] = field(default_factory=lambda: ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
 
     # Prediction heads
-    next_visit_hidden_dims: List[int] = field(default_factory=lambda: [128, 64])
-    slope_hidden_dims: List[int] = field(default_factory=lambda: [128, 64])
+    next_visit_hidden_dims: List[int] = field(default_factory=lambda: [256, 128])  # Larger heads
+    slope_hidden_dims: List[int] = field(default_factory=lambda: [256, 128])  # Larger heads
 
     # Time encoding
     max_time_months: int = 120  # 10 years
@@ -394,16 +394,20 @@ class TrainingConfig:
     """Configuration for training"""
 
     # Optimization
-    learning_rate: float = 1e-4
-    weight_decay: float = 1e-5
+    learning_rate: float = 5e-5  # Reduced from 1e-4 for more stable training
+    weight_decay: float = 1e-4  # Increased from 1e-5 for better regularization
     batch_size: int = 32
-    max_epochs: int = 100
+    max_epochs: int = 200  # Increased from 100 to allow more training
+    
+    # Learning rate warmup
+    warmup_epochs: int = 5  # Number of epochs for warmup
+    warmup_steps: Optional[int] = None  # If set, uses steps instead of epochs
 
     # Loss weights
     lambda_slope: float = 0.2  # Weight for slope prediction loss
 
     # Early stopping
-    early_stopping_patience: int = 15
+    early_stopping_patience: int = 20  # Increased from 15 to be more patient
 
     # Data
     min_visits_for_slope: int = 3

@@ -4,13 +4,14 @@ Prediction heads for V1 model
 
 import torch
 import torch.nn as nn
-from typing import List
+from typing import List, Optional
 
 
 class NextVisitPredictionHead(nn.Module):
     """
-    Predicts next visit UPDRS totals from current visit hidden state
-    Supports predicting multiple totals: NP1TOT, NP2TOT, NP3TOT, NP4TOT
+    Predicts next visit UPDRS totals from current visit hidden state.
+    
+    Supports predicting multiple totals: NP1TOT, NP2TOT, NP3TOT, NP4TOT.
     """
     
     def __init__(self, d_model: int, n_targets: int = 4, hidden_dims: List[int] = [128, 64], dropout: float = 0.1):
@@ -37,7 +38,6 @@ class NextVisitPredictionHead(nn.Module):
             ])
             prev_dim = hidden_dim
         
-        # Output layer: n_targets values (one per UPDRS total)
         layers.append(nn.Linear(prev_dim, n_targets))
         
         self.mlp = nn.Sequential(*layers)
@@ -50,25 +50,36 @@ class NextVisitPredictionHead(nn.Module):
         Returns:
             predictions: [batch, seq_len, n_targets] - predicted UPDRS totals for next visit
         """
-        predictions = self.mlp(hidden_states)  # [batch, seq_len, n_targets]
-        return predictions
+        return self.mlp(hidden_states)
 
 
 class ProgressionSlopeHead(nn.Module):
     """
-    Predicts patient-level progression slope from pooled representation
+    Predicts patient-level progression slopes from pooled representation.
+    
+    Supports predicting multiple slopes: one per UPDRS total
+    (NP1RTOT, NP2PTOT, NP3TOT, NP4TOT).
     """
     
-    def __init__(self, d_model: int, hidden_dims: List[int] = [128, 64], dropout: float = 0.1, pooling: str = 'mean'):
+    def __init__(
+        self,
+        d_model: int,
+        n_targets: int = 4,
+        hidden_dims: List[int] = [128, 64],
+        dropout: float = 0.1,
+        pooling: str = "mean",
+    ):
         """
         Args:
             d_model: Input dimension (from transformer)
+            n_targets: Number of slopes to predict (default: 4, one per UPDRS total)
             hidden_dims: Hidden layer dimensions
             dropout: Dropout rate
             pooling: Pooling method ('mean', 'last', or 'max')
         """
         super().__init__()
-        
+
+        self.n_targets = int(n_targets)
         self.pooling = pooling
         
         layers = []
@@ -83,8 +94,7 @@ class ProgressionSlopeHead(nn.Module):
             ])
             prev_dim = hidden_dim
         
-        # Output layer: single value (slope)
-        layers.append(nn.Linear(prev_dim, 1))
+        layers.append(nn.Linear(prev_dim, self.n_targets))
         
         self.mlp = nn.Sequential(*layers)
         
@@ -95,47 +105,46 @@ class ProgressionSlopeHead(nn.Module):
             attention_mask: [batch, seq_len] - 1 for valid positions, 0 for padding
             
         Returns:
-            slope: [batch] - predicted progression slope
+            slopes: [batch, n_targets] - predicted progression slopes (one per UPDRS total)
         """
-        # Pool sequence representation
+        pooled = self._pool_sequence(hidden_states, attention_mask)
+        return self.mlp(pooled)
+    
+    def _pool_sequence(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor]
+    ) -> torch.Tensor:
+        """Pool sequence representation using specified pooling method."""
         if self.pooling == 'mean':
             if attention_mask is not None:
-                # Masked mean pooling
                 mask_expanded = attention_mask.unsqueeze(-1).expand_as(hidden_states)
                 sum_hidden = (hidden_states * mask_expanded).sum(dim=1)
                 count = attention_mask.sum(dim=1, keepdim=True)
-                pooled = sum_hidden / count.clamp(min=1)
-            else:
-                pooled = hidden_states.mean(dim=1)
-                
+                return sum_hidden / count.clamp(min=1)
+            return hidden_states.mean(dim=1)
+        
         elif self.pooling == 'last':
             if attention_mask is not None:
-                # Get last valid position for each sequence
                 seq_lengths = attention_mask.sum(dim=1) - 1
                 batch_indices = torch.arange(hidden_states.size(0), device=hidden_states.device)
-                pooled = hidden_states[batch_indices, seq_lengths.long()]
-            else:
-                pooled = hidden_states[:, -1, :]
-                
+                return hidden_states[batch_indices, seq_lengths.long()]
+            return hidden_states[:, -1, :]
+        
         elif self.pooling == 'max':
             if attention_mask is not None:
                 mask_expanded = attention_mask.unsqueeze(-1).expand_as(hidden_states)
                 hidden_states_masked = hidden_states.clone()
                 hidden_states_masked[mask_expanded == 0] = -1e9
-                pooled = hidden_states_masked.max(dim=1)[0]
-            else:
-                pooled = hidden_states.max(dim=1)[0]
-        else:
-            raise ValueError(f"Unknown pooling method: {self.pooling}")
+                return hidden_states_masked.max(dim=1)[0]
+            return hidden_states.max(dim=1)[0]
         
-        # Predict slope
-        slope = self.mlp(pooled)
-        return slope.squeeze(-1)  # [batch]
+        raise ValueError(f"Unknown pooling method: {self.pooling}")
 
 
 class MultiTaskHead(nn.Module):
     """
-    Combines both prediction heads with separate losses
+    Combines both prediction heads (next-visit and slope) with separate losses.
     """
     
     def __init__(
@@ -160,7 +169,7 @@ class MultiTaskHead(nn.Module):
         
         self.n_targets = n_targets
         self.next_visit_head = NextVisitPredictionHead(d_model, n_targets, next_visit_hidden, dropout)
-        self.slope_head = ProgressionSlopeHead(d_model, slope_hidden, dropout, pooling)
+        self.slope_head = ProgressionSlopeHead(d_model, n_targets, slope_hidden, dropout, pooling)
     
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor = None):
         """
@@ -171,12 +180,9 @@ class MultiTaskHead(nn.Module):
         Returns:
             dict with 'next_visit' and 'slope' predictions
         """
-        next_visit_preds = self.next_visit_head(hidden_states)  # [batch, seq_len, n_targets]
-        slope_preds = self.slope_head(hidden_states, attention_mask)  # [batch]
-        
         return {
-            'next_visit': next_visit_preds,  # [batch, seq_len, n_targets]
-            'slope': slope_preds  # [batch]
+            'next_visit': self.next_visit_head(hidden_states),
+            'slope': self.slope_head(hidden_states, attention_mask)
         }
 
 

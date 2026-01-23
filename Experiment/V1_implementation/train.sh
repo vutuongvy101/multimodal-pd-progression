@@ -7,7 +7,7 @@ nohup python -u -m training.main \
   --num-workers 8 \
   --batch-size 64 \
   --device cuda \
-  --max-epochs 70 \
+  --max-epochs 120 \
   --patience 10 \
   > train_all.log 2>&1 &
 
@@ -18,7 +18,7 @@ nohup python -u -m training.main \
   --num-workers 8 \
   --batch-size 64 \
   --device cuda \
-  --max-epochs 70 \
+  --max-epochs 120 \
   --patience 10 \
   > train_static+motor.log 2>&1 &
 
@@ -29,7 +29,7 @@ nohup python -u -m training.main \
   --num-workers 8 \
   --batch-size 64 \
   --device cuda \
-  --max-epochs 70 \
+  --max-epochs 120 \
   --patience 10 \
   > train_motor_only.log 2>&1 &
 
@@ -40,7 +40,7 @@ nohup python -u -m training.main \
   --num-workers 8 \
   --batch-size 64 \
   --device cuda \
-  --max-epochs 70 \
+  --max-epochs 120 \
   --patience 10 \
   > train_static_only.log 2>&1 &
 
@@ -51,6 +51,6 @@ nohup python -u -m training.main \
   --num-workers 8 \
   --batch-size 64 \
   --device cuda \
-  --max-epochs 70 \
+  --max-epochs 120 \
   --patience 10 \
   > train_static+nonmotor.log 2>&1 &

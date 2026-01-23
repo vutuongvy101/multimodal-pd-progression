@@ -84,7 +84,7 @@ class TestPredictionHeads:
         n_targets = len(test_config.features.all_updrs_totals)
         
         # ProgressionSlopeHead predicts a single slope per patient
-        head = ProgressionSlopeHead(d_model)
+        head = ProgressionSlopeHead(d_model, n_targets=n_targets)
         assert head is not None
     
     def test_slope_head_forward(self, test_config):
@@ -94,8 +94,8 @@ class TestPredictionHeads:
         batch_size = 4
         seq_len = 5
         d_model = test_config.model.d_model
-        # Head predicts a single slope per patient from sequence hidden states
-        head = ProgressionSlopeHead(d_model)
+        n_targets = len(test_config.features.all_updrs_totals)
+        head = ProgressionSlopeHead(d_model, n_targets=n_targets)
         
         # Create input hidden states and attention mask
         hidden_states = torch.randn(batch_size, seq_len, d_model)
@@ -103,8 +103,7 @@ class TestPredictionHeads:
         
         output = head(hidden_states, attention_mask)
         
-        # Output should be [batch]
-        assert output.shape == (batch_size,)
+        assert output.shape == (batch_size, n_targets)
         assert not torch.isnan(output).any()
 
 
@@ -176,7 +175,7 @@ class TestV1Model:
         
         # Check output shapes
         assert next_visit_pred.shape == (batch_size, seq_len, n_targets)
-        assert slope_pred.shape == (batch_size,)
+        assert slope_pred.shape == (batch_size, n_targets)
         
         # Check for NaNs
         assert not torch.isnan(next_visit_pred).any()

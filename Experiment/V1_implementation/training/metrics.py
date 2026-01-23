@@ -2,15 +2,18 @@
 Evaluation metrics for V1 model.
 
 Provides:
- - Per-UPDRS-total metrics (MAE, RMSE, R^2, correlation)
- - Overall next-visit metrics (averaged across totals)
- - Slope metrics with correlation
+ - Per-UPDRS-total metrics (MAE, RMSE, R^2, Pearson correlation, Spearman correlation)
+ - Per-Δt bucket metrics for next-visit predictions
+ - Overall next-visit metrics (macro-average, weighted-average)
+ - Per-target slope metrics (MAE, RMSE, Spearman correlation)
+ - Support counts (number of samples per target)
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+from scipy.stats import spearmanr
 
 
 def _safe_correlation(x: np.ndarray, y: np.ndarray) -> float:
@@ -22,6 +25,19 @@ def _safe_correlation(x: np.ndarray, y: np.ndarray) -> float:
     if x_std == 0 or y_std == 0:
         return 0.0
     return float(np.corrcoef(x, y)[0, 1])
+
+
+def _safe_spearman(x: np.ndarray, y: np.ndarray) -> float:
+    """Compute Spearman correlation, returning 0.0 if undefined."""
+    if x.size < 2 or y.size < 2:
+        return 0.0
+    try:
+        rho, _ = spearmanr(x, y)
+        if np.isnan(rho):
+            return 0.0
+        return float(rho)
+    except:
+        return 0.0
 
 
 def _safe_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -41,6 +57,8 @@ def compute_comprehensive_metrics(
     targets: Dict[str, torch.Tensor],
     attention_mask: torch.Tensor,
     target_names: List[str],
+    time_months: Optional[torch.Tensor] = None,
+    delta_t_buckets: Optional[List[Tuple[float, float]]] = None,
 ) -> Dict:
     """
     Compute comprehensive evaluation metrics.
@@ -48,20 +66,26 @@ def compute_comprehensive_metrics(
     Args:
         predictions: dict with:
             - 'next_visit': [B, T, K] tensor
-            - 'slope': [B] tensor
+            - 'slope': [B, K] tensor (one slope per UPDRS total)
         targets: dict with:
             - 'next_visit': [B, T, K] tensor
             - 'next_visit_mask': [B, T, K] tensor (1=present, 0=missing) or None
-            - 'slope': [B] tensor
+            - 'slope': [B, K] tensor (one slope per UPDRS total)
         attention_mask: [B, T] tensor (1=valid, 0=padding)
         target_names: names for each UPDRS total in order of the last dimension
+        time_months: [B, T] tensor with time in months since baseline (for Δt bucket computation)
+        delta_t_buckets: List of (min, max) tuples for Δt buckets. Default: [(0, 6), (6, 12), (12, 24), (24, inf)]
 
     Returns:
         Dictionary with:
-          - 'next_visit': per-target metrics
-          - 'next_visit_overall': aggregated metrics
-          - 'slope': slope metrics
+          - 'next_visit': per-target metrics (with per-Δt bucket metrics)
+          - 'next_visit_overall': aggregated metrics (macro/weighted average)
+          - 'slope': per-target slope metrics
+          - 'slope_overall': overall slope metrics
     """
+    # Default Δt buckets: 0-6, 6-12, 12-24, 24+ months
+    if delta_t_buckets is None:
+        delta_t_buckets = [(0, 6), (6, 12), (12, 24), (24, float('inf'))]
     metrics: Dict[str, Dict] = {}
 
     # -----------------------------
@@ -87,6 +111,14 @@ def compute_comprehensive_metrics(
 
     combined_mask = time_mask * label_mask_shifted  # [B, T-1, K]
 
+    # Compute delta time (Δt) if time_months is provided
+    delta_t = None
+    if time_months is not None:
+        # Compute Δt = time[t+1] - time[t] for each transition
+        time_shifted = time_months[:, :-1]  # [B, T-1]
+        time_next = time_months[:, 1:]  # [B, T-1]
+        delta_t = (time_next - time_shifted).detach().cpu().numpy()  # [B, T-1]
+
     per_target_metrics: Dict[str, Dict] = {}
     n_targets = preds_shifted.shape[-1]
 
@@ -105,68 +137,160 @@ def compute_comprehensive_metrics(
                 "rmse": float("nan"),
                 "r2": float("nan"),
                 "correlation": float("nan"),
+                "spearman": float("nan"),
                 "n_samples": 0,
+                "delta_t_buckets": {},
             }
             continue
 
+        # Get valid predictions and targets
         valid_preds = pred_values[valid_mask].detach().cpu().numpy()
         valid_targets = target_values[valid_mask].detach().cpu().numpy()
+        
+        # Get corresponding delta_t values if available
+        valid_delta_t = None
+        if delta_t is not None:
+            valid_delta_t = delta_t[valid_mask.cpu().numpy()]
 
+        # Overall metrics for this target
         mae = float(np.mean(np.abs(valid_preds - valid_targets)))
         rmse = float(np.sqrt(np.mean((valid_preds - valid_targets) ** 2)))
         r2 = _safe_r2(valid_targets, valid_preds)
         corr = _safe_correlation(valid_targets, valid_preds)
+        spearman_corr = _safe_spearman(valid_targets, valid_preds)
+
+        # Per-Δt bucket metrics
+        delta_t_bucket_metrics = {}
+        if valid_delta_t is not None:
+            for bucket_idx, (min_dt, max_dt) in enumerate(delta_t_buckets):
+                bucket_mask = (valid_delta_t >= min_dt) & (valid_delta_t < max_dt)
+                if bucket_mask.sum() == 0:
+                    delta_t_bucket_metrics[f"dt_{min_dt}_{max_dt}"] = {
+                        "mae": float("nan"),
+                        "rmse": float("nan"),
+                        "n_samples": 0,
+                    }
+                    continue
+                
+                bucket_preds = valid_preds[bucket_mask]
+                bucket_targets = valid_targets[bucket_mask]
+                
+                bucket_mae = float(np.mean(np.abs(bucket_preds - bucket_targets)))
+                bucket_rmse = float(np.sqrt(np.mean((bucket_preds - bucket_targets) ** 2)))
+                
+                delta_t_bucket_metrics[f"dt_{min_dt}_{max_dt}"] = {
+                    "mae": bucket_mae,
+                    "rmse": bucket_rmse,
+                    "n_samples": int(bucket_mask.sum()),
+                }
 
         per_target_metrics[name] = {
             "mae": mae,
             "rmse": rmse,
             "r2": r2,
             "correlation": corr,
+            "spearman": spearman_corr,
             "n_samples": int(valid_preds.size),
+            "delta_t_buckets": delta_t_bucket_metrics,
         }
 
     metrics["next_visit"] = per_target_metrics
 
     # Overall metrics across all targets
+    # Macro-average: mean of per-target metrics
     maes = [m["mae"] for m in per_target_metrics.values() if not np.isnan(m["mae"])]
     rmses = [m["rmse"] for m in per_target_metrics.values() if not np.isnan(m["rmse"])]
     r2s = [m["r2"] for m in per_target_metrics.values() if not np.isnan(m["r2"])]
+    correlations = [m["correlation"] for m in per_target_metrics.values() if not np.isnan(m["correlation"])]
+    spearmans = [m["spearman"] for m in per_target_metrics.values() if not np.isnan(m["spearman"])]
+    
+    # Weighted-average: weights proportional to number of samples (support)
+    total_samples = sum(m["n_samples"] for m in per_target_metrics.values())
+    weighted_mae = 0.0
+    weighted_rmse = 0.0
+    if total_samples > 0:
+        for m in per_target_metrics.values():
+            if not np.isnan(m["mae"]) and m["n_samples"] > 0:
+                weight = m["n_samples"] / total_samples
+                weighted_mae += m["mae"] * weight
+                weighted_rmse += m["rmse"] * weight
 
     metrics["next_visit_overall"] = {
-        "mean_mae": float(np.mean(maes)) if maes else float("nan"),
-        "mean_rmse": float(np.mean(rmses)) if rmses else float("nan"),
-        "mean_r2": float(np.mean(r2s)) if r2s else float("nan"),
+        "macro_avg_mae": float(np.mean(maes)) if maes else float("nan"),
+        "macro_avg_rmse": float(np.mean(rmses)) if rmses else float("nan"),
+        "macro_avg_r2": float(np.mean(r2s)) if r2s else float("nan"),
+        "macro_avg_correlation": float(np.mean(correlations)) if correlations else float("nan"),
+        "macro_avg_spearman": float(np.mean(spearmans)) if spearmans else float("nan"),
+        "weighted_avg_mae": weighted_mae if total_samples > 0 else float("nan"),
+        "weighted_avg_rmse": weighted_rmse if total_samples > 0 else float("nan"),
+        "total_samples": int(total_samples),
     }
 
     # -----------------
-    # Slope metrics
+    # Slope metrics (per-target)
     # -----------------
-    slope_preds = predictions["slope"].detach().cpu().numpy()
-    slope_targets = targets["slope"].detach().cpu().numpy()
+    # Model predicts all 4 UPDRS total slopes: [batch, n_targets]
+    slope_preds = predictions["slope"].detach().cpu().numpy()  # [batch, n_targets]
+    slope_targets = targets["slope"].detach().cpu().numpy()  # [batch, n_targets]
 
-    valid_mask = ~np.isnan(slope_targets)
-    if valid_mask.sum() == 0:
-        metrics["slope"] = {
-            "mae": float("nan"),
-            "rmse": float("nan"),
-            "r2": float("nan"),
-            "correlation": float("nan"),
-            "n_samples": 0,
-        }
-    else:
-        v_preds = slope_preds[valid_mask]
-        v_targets = slope_targets[valid_mask]
-        slope_mae = float(np.mean(np.abs(v_preds - v_targets)))
-        slope_rmse = float(np.sqrt(np.mean((v_preds - v_targets) ** 2)))
-        slope_r2 = _safe_r2(v_targets, v_preds)
-        slope_corr = _safe_correlation(v_targets, v_preds)
-
-        metrics["slope"] = {
+    per_target_slope_metrics = {}
+    n_targets = slope_preds.shape[-1]
+    
+    # Compute per-target metrics
+    for target_idx in range(n_targets):
+        name = target_names[target_idx] if target_idx < len(target_names) else f"target_{target_idx}"
+        slope_name = f"{name}_slope"
+        
+        pred_values = slope_preds[:, target_idx]  # [batch]
+        target_values = slope_targets[:, target_idx]  # [batch]
+        
+        # Filter out NaN targets
+        valid_mask = ~np.isnan(target_values)
+        if valid_mask.sum() == 0:
+            per_target_slope_metrics[slope_name] = {
+                "mae": float("nan"),
+                "rmse": float("nan"),
+                "spearman": float("nan"),
+                "n_samples": 0,
+            }
+            continue
+        
+        valid_preds = pred_values[valid_mask]
+        valid_targets = target_values[valid_mask]
+        
+        slope_mae = float(np.mean(np.abs(valid_preds - valid_targets)))
+        slope_rmse = float(np.sqrt(np.mean((valid_preds - valid_targets) ** 2)))
+        slope_spearman = _safe_spearman(valid_targets, valid_preds)
+        
+        per_target_slope_metrics[slope_name] = {
             "mae": slope_mae,
             "rmse": slope_rmse,
-            "r2": slope_r2,
-            "correlation": slope_corr,
-            "n_samples": int(v_preds.size),
+            "spearman": slope_spearman,
+            "n_samples": int(valid_preds.size),
+        }
+    
+    metrics["slope"] = per_target_slope_metrics
+    
+    # Overall slope metrics (macro-average across targets)
+    valid_slope_metrics = [m for m in per_target_slope_metrics.values() if m["n_samples"] > 0]
+    if valid_slope_metrics:
+        maes = [m["mae"] for m in valid_slope_metrics if not np.isnan(m["mae"])]
+        rmses = [m["rmse"] for m in valid_slope_metrics if not np.isnan(m["rmse"])]
+        spearmans = [m["spearman"] for m in valid_slope_metrics if not np.isnan(m["spearman"])]
+        total_samples = sum(m["n_samples"] for m in valid_slope_metrics)
+        
+        metrics["slope_overall"] = {
+            "mae": float(np.mean(maes)) if maes else float("nan"),
+            "rmse": float(np.mean(rmses)) if rmses else float("nan"),
+            "spearman": float(np.mean(spearmans)) if spearmans else float("nan"),
+            "n_samples": int(total_samples),
+        }
+    else:
+        metrics["slope_overall"] = {
+            "mae": float("nan"),
+            "rmse": float("nan"),
+            "spearman": float("nan"),
+            "n_samples": 0,
         }
 
     return metrics

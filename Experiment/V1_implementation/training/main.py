@@ -167,6 +167,7 @@ def evaluate_with_metrics(
     all_predictions = {"next_visit": [], "slope": []}
     all_targets = {"next_visit": [], "next_visit_mask": [], "slope": []}
     all_attention_masks = []
+    all_time_months = []
 
     for batch in loader:
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -201,6 +202,7 @@ def evaluate_with_metrics(
             all_targets["next_visit_mask"].append(targets["next_visit_mask"].detach().cpu())
         all_targets["slope"].append(targets["slope"].detach().cpu())
         all_attention_masks.append(batch["attention_mask"].detach().cpu())
+        all_time_months.append(batch["time_months"].detach().cpu())
 
     for key in epoch_losses:
         epoch_losses[key] /= max(n_batches, 1)
@@ -218,12 +220,14 @@ def evaluate_with_metrics(
         else None,
     }
     attention_mask_cat = torch.cat(all_attention_masks, dim=0)
+    time_months_cat = torch.cat(all_time_months, dim=0)
 
     metrics = compute_comprehensive_metrics(
         predictions_cat,
         targets_cat,
         attention_mask_cat,
         target_names=target_names,
+        time_months=time_months_cat,
     )
 
     return {"losses": epoch_losses, "metrics": metrics}
@@ -313,15 +317,44 @@ def train_single_split(config, prepared, args):
     for name, m in metrics["next_visit"].items():
         print(
             f"  {name}: MAE={m['mae']:.4f}, RMSE={m['rmse']:.4f}, "
-            f"R2={m['r2']:.4f}, corr={m['correlation']:.4f}, n={m['n_samples']}"
+            f"R2={m['r2']:.4f}, Pearson={m['correlation']:.4f}, "
+            f"Spearman={m.get('spearman', float('nan')):.4f}, n={m['n_samples']}"
         )
-    print(
-        f"\nSlope metrics: MAE={metrics['slope']['mae']:.4f}, "
-        f"RMSE={metrics['slope']['rmse']:.4f}, "
-        f"R2={metrics['slope']['r2']:.4f}, "
-        f"corr={metrics['slope']['correlation']:.4f}, "
-        f"n={metrics['slope']['n_samples']}"
-    )
+        # Print per-Δt bucket metrics if available
+        if m.get('delta_t_buckets'):
+            print(f"    Per-Δt buckets:")
+            for bucket_name, bucket_metrics in m['delta_t_buckets'].items():
+                if bucket_metrics['n_samples'] > 0:
+                    print(
+                        f"      {bucket_name}: MAE={bucket_metrics['mae']:.4f}, "
+                        f"RMSE={bucket_metrics['rmse']:.4f}, n={bucket_metrics['n_samples']}"
+                    )
+    
+    # Print overall next-visit metrics
+    if "next_visit_overall" in metrics:
+        overall = metrics["next_visit_overall"]
+        print(f"\nNext-visit overall: Macro MAE={overall.get('macro_avg_mae', float('nan')):.4f}, "
+              f"Weighted MAE={overall.get('weighted_avg_mae', float('nan')):.4f}, "
+              f"Total samples={overall.get('total_samples', 0)}")
+    
+    # Print per-target slope metrics
+    print("\nPer-target slope metrics:")
+    for name, m in metrics.get("slope", {}).items():
+        if m.get('n_samples', 0) > 0:
+            print(
+                f"  {name}: MAE={m['mae']:.4f}, RMSE={m['rmse']:.4f}, "
+                f"Spearman={m.get('spearman', float('nan')):.4f}, n={m['n_samples']}"
+            )
+    
+    # Print overall slope metrics
+    if "slope_overall" in metrics:
+        slope_overall = metrics["slope_overall"]
+        print(
+            f"\nSlope overall: MAE={slope_overall['mae']:.4f}, "
+            f"RMSE={slope_overall['rmse']:.4f}, "
+            f"Spearman={slope_overall.get('spearman', float('nan')):.4f}, "
+            f"n={slope_overall['n_samples']}"
+        )
 
 
 def train_kfold_cv(config, prepared, args):

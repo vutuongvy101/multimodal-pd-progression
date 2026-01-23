@@ -132,20 +132,24 @@ class PPMILongitudinalDataset(Dataset):
         next_visit_targets = torch.FloatTensor(updrs_totals_filled)  # [seq_len, 4]
         next_visit_label_mask = torch.FloatTensor(label_mask)  # [seq_len, 4]
         
-        # Slope - extract NP3TOT_slope (primary motor progression) or use NaN
+        # Extract all UPDRS total slopes: NP1RTOT, NP2PTOT, NP3TOT, NP4TOT
         slope_dict = self.slopes.get(patno, {})
+        slope_values = []
+        
+        # Default order: NP1RTOT, NP2PTOT, NP3TOT, NP4TOT
+        slope_keys = ['NP1RTOT_slope', 'NP2PTOT_slope', 'NP3TOT_slope', 'NP4TOT_slope']
+        
         if isinstance(slope_dict, dict):
-            # Try NP3TOT_slope first (most important for motor progression)
-            slope_value = slope_dict.get('NP3TOT_slope', float('nan'))
-            # If NP3TOT not available, try to get any valid slope
-            if pd.isna(slope_value):
-                valid_slopes = [v for v in slope_dict.values() if pd.notna(v)]
-                slope_value = valid_slopes[0] if valid_slopes else float('nan')
+            for key in slope_keys:
+                slope_value = slope_dict.get(key, float('nan'))
+                slope_values.append(slope_value)
         else:
             # Fallback if slopes is already a float (backward compatibility)
+            # Assume it's NP3TOT_slope (index 2)
             slope_value = slope_dict if not pd.isna(slope_dict) else float('nan')
+            slope_values = [float('nan'), float('nan'), slope_value, float('nan')]
         
-        slope_target = torch.FloatTensor([slope_value])
+        slope_target = torch.FloatTensor(slope_values)  # [4]
         return {
             'static_values': static_values,
             'static_mask': static_mask,
@@ -240,8 +244,8 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         
         attention_mask[i, :seq_len] = 1  # 1 = valid visit, 0 = padding
     
-    # Slopes
-    slope_targets = torch.stack([item['slope_target'] for item in batch]).squeeze(-1)
+    # Slopes: stack to [batch, 4] (one slope per UPDRS total)
+    slope_targets = torch.stack([item['slope_target'] for item in batch])  # [batch, 4]
     
     return {
         'static_values': static_values,

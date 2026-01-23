@@ -201,8 +201,8 @@ class TestDataIntegratorCreateFeatureVectors:
         assert 'motor_mask' in visit
         assert 'updrs_supplementary_values' in visit
         assert 'updrs_supplementary_mask' in visit
-        assert 'non_motor_values' in visit
-        assert 'non_motor_mask' in visit
+        assert 'nonmotor_values' in visit
+        assert 'nonmotor_mask' in visit
         assert 'med_values' in visit
         assert 'med_mask' in visit
         assert 'time_months' in visit
@@ -275,7 +275,7 @@ class TestDataIntegratorCreateFeatureVectors:
         # UPDRS supplementary, non-motor, and med features should be empty arrays
         visit = result['longitudinal_data'][1][0]
         assert len(visit['updrs_supplementary_values']) == 0
-        assert len(visit['non_motor_values']) == 0
+        assert len(visit['nonmotor_values']) == 0
         assert len(visit['med_values']) == 0
         
         # Slopes should be dict with all UPDRS totals, NaN when missing
@@ -632,7 +632,7 @@ class TestDataIntegratorIntegration:
             visit = visits[0]
             required_keys = ['motor_values', 'motor_mask', 
                            'updrs_supplementary_values', 'updrs_supplementary_mask',
-                           'non_motor_values', 'non_motor_mask',
+                           'nonmotor_values', 'nonmotor_mask',
                            'med_values', 'med_mask', 
                            'time_months', 'updrs_totals', 'np3tot']
             for key in required_keys:
@@ -744,8 +744,8 @@ class TestDataIntegratorIntegration:
                     'motor_n_missing': int(visit['motor_mask'].sum()),
                     'updrs_supplementary_n_features': len(visit['updrs_supplementary_values']),
                     'updrs_supplementary_n_missing': int(visit['updrs_supplementary_mask'].sum()),
-                    'non_motor_n_features': len(visit['non_motor_values']),
-                    'non_motor_n_missing': int(visit['non_motor_mask'].sum()),
+                    'non_motor_n_features': len(visit['nonmotor_values']),
+                    'non_motor_n_missing': int(visit['nonmotor_mask'].sum()),
                     'med_n_features': len(visit['med_values']),
                     'med_n_missing': int(visit['med_mask'].sum()),
                     'np3tot': float(visit['np3tot']) if not np.isnan(visit['np3tot']) else np.nan,
@@ -820,8 +820,8 @@ class TestDataIntegratorIntegration:
                         'motor_mask': visit['motor_mask'].tolist(),
                         'updrs_supplementary_values': visit['updrs_supplementary_values'].tolist(),
                         'updrs_supplementary_mask': visit['updrs_supplementary_mask'].tolist(),
-                        'non_motor_values': visit['non_motor_values'].tolist(),
-                        'non_motor_mask': visit['non_motor_mask'].tolist(),
+                        'non_motor_values': visit['nonmotor_values'].tolist(),
+                        'non_motor_mask': visit['nonmotor_mask'].tolist(),
                         'med_values': visit['med_values'].tolist(),
                         'med_mask': visit['med_mask'].tolist(),
                         'updrs_totals': [float(v) if not np.isnan(v) else None 

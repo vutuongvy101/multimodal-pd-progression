@@ -27,6 +27,7 @@ class DummyTrainer:
 
         self.current_epoch = 3
         self.best_val_loss = 0.1234
+        self.best_epoch = 2
         self.training_history = {"train_loss": [1.0, 0.5, 0.25]}
 
         self.save_dir = Path(config.data.model_save_dir)

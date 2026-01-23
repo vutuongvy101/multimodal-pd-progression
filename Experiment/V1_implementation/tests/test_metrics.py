@@ -32,8 +32,9 @@ def test_compute_comprehensive_metrics_basic():
 
     attention_mask = torch.ones((1, 3), device=device)
     label_mask = torch.ones((1, 3, 2), device=device)
-    slope_preds = torch.tensor([0.5], device=device)
-    slope_targets = torch.tensor([1.0], device=device)
+    # Slopes: [batch, n_targets] - one slope per UPDRS total
+    slope_preds = torch.tensor([[0.5, 0.3]], device=device)  # [1, 2]
+    slope_targets = torch.tensor([[1.0, 0.8]], device=device)  # [1, 2]
 
     predictions = {
         "next_visit": preds_next,
@@ -68,10 +69,26 @@ def test_compute_comprehensive_metrics_basic():
     assert abs(m1["correlation"] - 1.0) < 1e-5
     assert abs(m1["r2"] - (-1.0)) < 1e-5
 
-    # Slope metrics: preds=0.5, target=1.0 -> MAE=0.5, RMSE=0.5, corr=0 (degenerate), R2=0
-    ms = metrics["slope"]
-    assert ms["n_samples"] == 1
-    assert abs(ms["mae"] - 0.5) < 1e-5
-    assert abs(ms["rmse"] - 0.5) < 1e-5
-    assert abs(ms["correlation"] - 0.0) < 1e-6
-    assert abs(ms["r2"] - 0.0) < 1e-6
+    # Slope metrics: per-target slopes
+    # NP1RTOT_slope: preds=0.5, target=1.0 -> MAE=0.5, RMSE=0.5
+    # NP2PTOT_slope: preds=0.3, target=0.8 -> MAE=0.5, RMSE=0.5
+    # Check per-target slope metrics
+    assert "NP1RTOT_slope" in metrics["slope"]
+    assert "NP2PTOT_slope" in metrics["slope"]
+    
+    ms0 = metrics["slope"]["NP1RTOT_slope"]
+    ms1 = metrics["slope"]["NP2PTOT_slope"]
+    
+    assert ms0["n_samples"] == 1
+    assert abs(ms0["mae"] - 0.5) < 1e-5
+    assert abs(ms0["rmse"] - 0.5) < 1e-5
+    
+    assert ms1["n_samples"] == 1
+    assert abs(ms1["mae"] - 0.5) < 1e-5
+    assert abs(ms1["rmse"] - 0.5) < 1e-5
+    
+    # Check overall slope metrics (macro-average)
+    ms_overall = metrics["slope_overall"]
+    assert ms_overall["n_samples"] == 2
+    assert abs(ms_overall["mae"] - 0.5) < 1e-5  # Mean of 0.5 and 0.5
+    assert abs(ms_overall["rmse"] - 0.5) < 1e-5  # Mean of 0.5 and 0.5

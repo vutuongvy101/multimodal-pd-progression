@@ -51,11 +51,9 @@ class KFoldTrainer:
         self.device = device
         self.num_workers = num_workers
         
-        # Results storage
         self.fold_results: List[Dict] = []
         self.test_loader: Optional[DataLoader] = None
         
-        # Create save directory
         self.save_dir = Path(config.data.model_save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
     
@@ -97,59 +95,22 @@ class KFoldTrainer:
         print(f"FOLD {fold_idx + 1}/{self.n_splits}")
         print(f"{'=' * 80}")
         
-        # Create fresh model for this fold
         model = V1MultimodalTransformer(self.config)
+        trainer = self._create_fold_trainer(fold_idx, model, train_loader, val_loader)
         
-        # Create trainer for this fold
-        # Use a fold-specific save directory to avoid overwriting
-        fold_save_dir = self.save_dir / f"fold_{fold_idx + 1}"
-        
-        # Temporarily modify config for this fold (trainer reads save_dir at init)
-        original_save_dir = self.config.data.model_save_dir
-        self.config.data.model_save_dir = str(fold_save_dir)
-        
-        trainer = V1Trainer(
-            model=model,
-            config=self.config,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            device=self.device
-        )
-        
-        # Restore original save dir (trainer has already copied the path at init)
-        self.config.data.model_save_dir = original_save_dir
-        
-        # Train this fold
         max_epochs = self.config.training.max_epochs
         patience = self.config.training.early_stopping_patience
-        
         trainer.train(max_epochs=max_epochs, early_stopping_patience=patience)
         
-        # Evaluate on validation set
         val_metrics = trainer.validate()
         
-        # Save fold checkpoint if requested
         if save_fold_checkpoint:
+            fold_save_dir = self.save_dir / f"fold_{fold_idx + 1}"
             fold_save_dir.mkdir(parents=True, exist_ok=True)
-            trainer.save_checkpoint(is_best=True)  # Save best checkpoint for this fold
+            trainer.save_checkpoint(is_best=True)
         
-        # Extract results
-        fold_result = {
-            'fold': fold_idx + 1,
-            'best_val_loss': trainer.best_val_loss,
-            'val_loss': val_metrics['loss'],
-            'val_loss_next_visit': val_metrics['loss_next_visit'],
-            'val_loss_slope': val_metrics['loss_slope'],
-            'best_epoch': trainer.current_epoch,
-            'n_epochs_trained': len(trainer.training_history['train_loss'])
-        }
-        
-        print(f"\nFold {fold_idx + 1} Results:")
-        print(f"  Best Val Loss: {trainer.best_val_loss:.4f} (epoch {trainer.current_epoch})")
-        print(f"  Final Val Loss: {val_metrics['loss']:.4f}")
-        print(f"    - Next Visit: {val_metrics['loss_next_visit']:.4f}")
-        print(f"    - Slope: {val_metrics['loss_slope']:.4f}")
-        
+        fold_result = self._extract_fold_results(fold_idx, trainer, val_metrics)
+        self._print_fold_results(fold_idx, trainer, val_metrics)
         return fold_result
     
     def train(self, save_fold_checkpoints: bool = True) -> Dict:
@@ -162,27 +123,15 @@ class KFoldTrainer:
         Returns:
             Dictionary with aggregated results and per-fold metrics
         """
-        print("=" * 80)
-        print("K-FOLD CROSS-VALIDATION TRAINING")
-        print("=" * 80)
-        print(f"Folds: {self.n_splits}")
-        print(f"Test ratio: {self.test_ratio}")
-        print(f"Epochs per fold: {self.config.training.max_epochs}")
-        print(f"Early stopping patience: {self.config.training.early_stopping_patience}")
-        print(f"Device: {self.device}")
-        print("=" * 80)
+        self._print_training_header()
         
-        # Create fold dataloaders
         print("\n--- Creating K-Fold Dataloaders ---")
         fold_dataloaders, test_loader = self._create_fold_dataloaders()
         self.test_loader = test_loader
-        
         print(f"  ✓ Created {self.n_splits} folds")
         print(f"  ✓ Test set: {len(test_loader.dataset)} patients (held out)")
         
-        # Train each fold
         self.fold_results = []
-        
         for fold_idx, (train_loader, val_loader) in enumerate(fold_dataloaders):
             fold_result = self.train_fold(
                 fold_idx=fold_idx,
@@ -192,13 +141,8 @@ class KFoldTrainer:
             )
             self.fold_results.append(fold_result)
         
-        # Aggregate results
         summary = self._aggregate_results()
-        
-        # Print summary
         self._print_summary(summary)
-        
-        # Save results
         self._save_results(summary)
         
         return {
@@ -207,8 +151,20 @@ class KFoldTrainer:
             'test_loader': test_loader
         }
     
+    def _print_training_header(self):
+        """Print training configuration header."""
+        print("=" * 80)
+        print("K-FOLD CROSS-VALIDATION TRAINING")
+        print("=" * 80)
+        print(f"Folds: {self.n_splits}")
+        print(f"Test ratio: {self.test_ratio}")
+        print(f"Epochs per fold: {self.config.training.max_epochs}")
+        print(f"Early stopping patience: {self.config.training.early_stopping_patience}")
+        print(f"Device: {self.device}")
+        print("=" * 80)
+    
     def _aggregate_results(self) -> Dict:
-        """Aggregate results across folds"""
+        """Aggregate results across folds."""
         val_losses = [r['val_loss'] for r in self.fold_results]
         val_next_visit = [r['val_loss_next_visit'] for r in self.fold_results]
         val_slope = [r['val_loss_slope'] for r in self.fold_results]
@@ -228,7 +184,7 @@ class KFoldTrainer:
         return summary
     
     def _print_summary(self, summary: Dict):
-        """Print aggregated results summary"""
+        """Print aggregated results summary."""
         print("\n" + "=" * 80)
         print("K-FOLD CROSS-VALIDATION RESULTS")
         print("=" * 80)
@@ -253,7 +209,7 @@ class KFoldTrainer:
         print("=" * 80)
     
     def _save_results(self, summary: Dict):
-        """Save CV results to JSON"""
+        """Save CV results to JSON."""
         results = {
             'n_splits': self.n_splits,
             'test_ratio': self.test_ratio,
@@ -285,7 +241,24 @@ class KFoldTrainer:
         if self.test_loader is None:
             raise ValueError("Must call train() first to create test loader")
         
-        # Find best fold
+        model_path = self._resolve_model_path(model_path)
+        model = self._load_model_for_evaluation(model_path)
+        
+        test_losses, all_predictions, all_targets, all_attention_masks, all_time_months = \
+            self._evaluate_test_set(model)
+        
+        predictions_cat, targets_cat, attention_mask_cat, time_months_cat = \
+            self._concatenate_test_results(all_predictions, all_targets, all_attention_masks, all_time_months)
+        
+        metrics = self._compute_test_metrics(predictions_cat, targets_cat, attention_mask_cat, time_months_cat)
+        
+        self._print_test_results(test_losses, metrics)
+        self._save_test_metrics(test_losses, metrics, model_path)
+        
+        return {'losses': test_losses, 'metrics': metrics}
+    
+    def _resolve_model_path(self, model_path: Optional[str]) -> Path:
+        """Resolve model path, defaulting to best fold if not provided."""
         if model_path is None:
             best_fold_idx = min(
                 range(len(self.fold_results)),
@@ -294,74 +267,104 @@ class KFoldTrainer:
             fold_num = best_fold_idx + 1
             model_path = self.save_dir / f"fold_{fold_num}" / "best_checkpoint.pt"
             print(f"\nUsing best fold model (fold {fold_num}) for test evaluation")
-        
-        # Load model
+        return Path(model_path)
+    
+    def _load_model_for_evaluation(self, model_path: Path) -> V1MultimodalTransformer:
+        """Load model from checkpoint for evaluation."""
         model = V1MultimodalTransformer(self.config)
         checkpoint = torch.load(model_path, map_location=self.device)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(self.device)
         model.eval()
-
-        # Evaluate with losses + rich metrics
-        test_losses = {
-            'loss': 0.0,
-            'loss_next_visit': 0.0,
-            'loss_slope': 0.0
-        }
+        return model
+    
+    def _evaluate_test_set(
+        self,
+        model: V1MultimodalTransformer
+    ) -> Tuple[Dict[str, float], Dict[str, List], Dict[str, List], List, List]:
+        """Evaluate model on test set and accumulate predictions/targets."""
+        test_losses = {'loss': 0.0, 'loss_next_visit': 0.0, 'loss_slope': 0.0}
         n_batches = len(self.test_loader)
-
+        
         all_predictions = {'next_visit': [], 'slope': []}
         all_targets = {'next_visit': [], 'next_visit_mask': [], 'slope': []}
         all_attention_masks = []
-
+        all_time_months = []
+        
         with torch.no_grad():
             for batch in tqdm(self.test_loader, desc="Test Evaluation"):
-                batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
-                         for k, v in batch.items()}
-
-                predictions = model(
-                    batch['static_values'],
-                    batch['static_mask'],
-                    batch['motor_values'],
-                    batch['motor_mask'],
-                    batch['nonmotor_values'],
-                    batch['nonmotor_mask'],
-                    batch['med_values'],
-                    batch['med_mask'],
-                    batch['age_at_visit_values'],
-                    batch['age_at_visit_mask'],
-                    batch['time_months'],
-                    batch['attention_mask']
-                )
-
-                targets = {
-                    'next_visit': batch['next_visit_targets'],
-                    'next_visit_mask': batch.get('next_visit_label_mask'),
-                    'slope': batch['slope_targets']
-                }
-
+                batch = self._move_batch_to_device(batch)
+                predictions = self._forward_batch(model, batch)
+                targets = self._extract_targets(batch)
+                
                 losses = model.compute_loss(
-                    predictions,
-                    targets,
-                    batch['attention_mask'],
-                    self.config.training.lambda_slope
+                    predictions, targets, batch['attention_mask'], self.config.training.lambda_slope
                 )
-
+                
                 for key in test_losses:
                     test_losses[key] += losses[key].item()
-
-                # Accumulate for metrics
-                all_predictions['next_visit'].append(predictions['next_visit'].detach().cpu())
-                all_predictions['slope'].append(predictions['slope'].detach().cpu())
-                all_targets['next_visit'].append(targets['next_visit'].detach().cpu())
-                if targets['next_visit_mask'] is not None:
-                    all_targets['next_visit_mask'].append(targets['next_visit_mask'].detach().cpu())
-                all_targets['slope'].append(targets['slope'].detach().cpu())
-                all_attention_masks.append(batch['attention_mask'].detach().cpu())
-
+                
+                self._accumulate_batch_results(
+                    predictions, targets, batch, all_predictions, all_targets,
+                    all_attention_masks, all_time_months
+                )
+        
         for key in test_losses:
             test_losses[key] /= max(n_batches, 1)
-
+        
+        return test_losses, all_predictions, all_targets, all_attention_masks, all_time_months
+    
+    def _move_batch_to_device(self, batch: Dict) -> Dict:
+        """Move batch tensors to device."""
+        return {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+    
+    def _forward_batch(self, model: V1MultimodalTransformer, batch: Dict) -> Dict[str, torch.Tensor]:
+        """Run forward pass on a batch."""
+        return model(
+            batch['static_values'], batch['static_mask'],
+            batch['motor_values'], batch['motor_mask'],
+            batch['nonmotor_values'], batch['nonmotor_mask'],
+            batch['med_values'], batch['med_mask'],
+            batch['age_at_visit_values'], batch['age_at_visit_mask'],
+            batch['time_months'], batch['attention_mask']
+        )
+    
+    def _extract_targets(self, batch: Dict) -> Dict[str, torch.Tensor]:
+        """Extract target tensors from batch."""
+        return {
+            'next_visit': batch['next_visit_targets'],
+            'next_visit_mask': batch.get('next_visit_label_mask'),
+            'slope': batch['slope_targets']
+        }
+    
+    def _accumulate_batch_results(
+        self,
+        predictions: Dict[str, torch.Tensor],
+        targets: Dict[str, torch.Tensor],
+        batch: Dict,
+        all_predictions: Dict[str, List],
+        all_targets: Dict[str, List],
+        all_attention_masks: List,
+        all_time_months: List
+    ):
+        """Accumulate batch results for metric computation."""
+        all_predictions['next_visit'].append(predictions['next_visit'].detach().cpu())
+        all_predictions['slope'].append(predictions['slope'].detach().cpu())
+        all_targets['next_visit'].append(targets['next_visit'].detach().cpu())
+        if targets['next_visit_mask'] is not None:
+            all_targets['next_visit_mask'].append(targets['next_visit_mask'].detach().cpu())
+        all_targets['slope'].append(targets['slope'].detach().cpu())
+        all_attention_masks.append(batch['attention_mask'].detach().cpu())
+        all_time_months.append(batch['time_months'].detach().cpu())
+    
+    def _concatenate_test_results(
+        self,
+        all_predictions: Dict[str, List],
+        all_targets: Dict[str, List],
+        all_attention_masks: List,
+        all_time_months: List
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+        """Concatenate accumulated batch results."""
         predictions_cat = {
             'next_visit': torch.cat(all_predictions['next_visit'], dim=0),
             'slope': torch.cat(all_predictions['slope'], dim=0),
@@ -369,52 +372,87 @@ class KFoldTrainer:
         targets_cat = {
             'next_visit': torch.cat(all_targets['next_visit'], dim=0),
             'slope': torch.cat(all_targets['slope'], dim=0),
-            'next_visit_mask': torch.cat(all_targets['next_visit_mask'], dim=0)
-            if all_targets['next_visit_mask']
-            else None,
+            'next_visit_mask': (
+                torch.cat(all_targets['next_visit_mask'], dim=0)
+                if all_targets['next_visit_mask'] else None
+            ),
         }
         attention_mask_cat = torch.cat(all_attention_masks, dim=0)
-
-        target_names = getattr(self.config.features, 'all_updrs_totals', ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
-        metrics = compute_comprehensive_metrics(
-            predictions_cat,
-            targets_cat,
-            attention_mask_cat,
-            target_names=target_names,
+        time_months_cat = torch.cat(all_time_months, dim=0)
+        return predictions_cat, targets_cat, attention_mask_cat, time_months_cat
+    
+    def _compute_test_metrics(
+        self,
+        predictions_cat: Dict[str, torch.Tensor],
+        targets_cat: Dict[str, torch.Tensor],
+        attention_mask_cat: torch.Tensor,
+        time_months_cat: torch.Tensor
+    ) -> Dict:
+        """Compute comprehensive metrics on test set."""
+        target_names = getattr(
+            self.config.features, 'all_updrs_totals', ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']
         )
-
+        return compute_comprehensive_metrics(
+            predictions_cat, targets_cat, attention_mask_cat,
+            target_names=target_names, time_months=time_months_cat
+        )
+    
+    def _print_test_results(self, test_losses: Dict[str, float], metrics: Dict):
+        """Print test set evaluation results."""
         print(f"\nTest Set Results (losses):")
         print(f"  Loss: {test_losses['loss']:.4f}")
         print(f"    - Next Visit: {test_losses['loss_next_visit']:.4f}")
         print(f"    - Slope: {test_losses['loss_slope']:.4f}")
-
+        
         print("\nPer-UPDRS metrics (test set):")
         for name, m in metrics['next_visit'].items():
             print(
                 f"  {name}: MAE={m['mae']:.4f}, RMSE={m['rmse']:.4f}, "
-                f"R2={m['r2']:.4f}, corr={m['correlation']:.4f}, n={m['n_samples']}"
+                f"R2={m['r2']:.4f}, Pearson={m['correlation']:.4f}, "
+                f"Spearman={m.get('spearman', float('nan')):.4f}, n={m['n_samples']}"
             )
-
-        print(
-            f"\nSlope metrics: MAE={metrics['slope']['mae']:.4f}, "
-            f"RMSE={metrics['slope']['rmse']:.4f}, "
-            f"R2={metrics['slope']['r2']:.4f}, "
-            f"corr={metrics['slope']['correlation']:.4f}, "
-            f"n={metrics['slope']['n_samples']}"
-        )
-
-        # Save metrics to JSON alongside existing k-fold results
+            if m.get('delta_t_buckets'):
+                print(f"    Per-Δt buckets:")
+                for bucket_name, bucket_metrics in m['delta_t_buckets'].items():
+                    if bucket_metrics['n_samples'] > 0:
+                        print(
+                            f"      {bucket_name}: MAE={bucket_metrics['mae']:.4f}, "
+                            f"RMSE={bucket_metrics['rmse']:.4f}, n={bucket_metrics['n_samples']}"
+                        )
+        
+        if "next_visit_overall" in metrics:
+            overall = metrics["next_visit_overall"]
+            print(f"\nNext-visit overall: Macro MAE={overall.get('macro_avg_mae', float('nan')):.4f}, "
+                  f"Weighted MAE={overall.get('weighted_avg_mae', float('nan')):.4f}, "
+                  f"Total samples={overall.get('total_samples', 0)}")
+        
+        print("\nPer-target slope metrics:")
+        for name, m in metrics.get("slope", {}).items():
+            if m.get('n_samples', 0) > 0:
+                print(
+                    f"  {name}: MAE={m['mae']:.4f}, RMSE={m['rmse']:.4f}, "
+                    f"Spearman={m.get('spearman', float('nan')):.4f}, n={m['n_samples']}"
+                )
+        
+        if "slope_overall" in metrics:
+            slope_overall = metrics["slope_overall"]
+            print(
+                f"\nSlope overall: MAE={slope_overall['mae']:.4f}, "
+                f"RMSE={slope_overall['rmse']:.4f}, "
+                f"Spearman={slope_overall.get('spearman', float('nan')):.4f}, "
+                f"n={slope_overall['n_samples']}"
+            )
+    
+    def _save_test_metrics(self, test_losses: Dict[str, float], metrics: Dict, model_path: Path):
+        """Save test metrics to JSON file."""
         results_path = self.save_dir / 'test_metrics_best_fold.json'
         to_save = {
             'losses': test_losses,
             'metrics': metrics,
             'model_path': str(model_path),
         }
-        import json
-
         with open(results_path, 'w') as f:
             json.dump(to_save, f, indent=2)
-
         print(f"\n✓ Saved test metrics to {results_path}")
 
         return {'losses': test_losses, 'metrics': metrics}

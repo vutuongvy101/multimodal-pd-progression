@@ -39,7 +39,7 @@ A simplified, production-ready deep learning model for PD progression prediction
 | **Medication-Aware** | Explicit ON/OFF status and LEDD as features |
 | **Missingness Handling** | Built-in masks for each modality |
 | **Time-Aware** | Continuous time encoding (actual months, not indices) |
-| **Multi-Objective** | Predicts next-visit UPDRS totals (NP1RTOT, NP2PTOT, NP3TOT, NP4TOT) + patient-level progression slope (default: NP3TOT_slope) |
+| **Multi-Objective** | Predicts next-visit UPDRS totals (NP1RTOT, NP2PTOT, NP3TOT, NP4TOT) + patient-level progression slopes (all 4 UPDRS totals) |
 
 ---
 
@@ -471,12 +471,13 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
 ├─────────────────────────────────────────────────────────────────┤
 │ For each patient with ≥min_visits visits:                        │
 │   - Fit linear regression: score ~ months_since_baseline        │
+│   - Fit linear regression: score ~ months_since_baseline        │
 │   - Compute slope for NP1RTOT, NP2PTOT, NP3TOT, NP4TOT           │
 │   - Store all slopes per patient (slopes_dict)                   │
 │ → slopes_df (one row per patient with all slope columns)         │
 │                                                                   │
-│ Note: Model predicts ONE slope per patient (default: NP3TOT_slope)│
-│       but slopes are computed for all totals during preparation   │
+│ Note: Model predicts ALL 4 slopes per patient (one per UPDRS total)│
+│       Slopes are computed for all totals during data preparation  │
 └─────────────────────────────────────────────────────────────────┘
                          │
                          ▼
@@ -508,8 +509,8 @@ The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipel
 │   - Per-patient static data: {'values': array, 'mask': array}   │
 │   - Per-patient longitudinal data: List of visit dicts          │
 │   - Slopes dictionary: {PATNO: Dict[str, float]}                │
-│     Keys: 'NP1RTOT_slope', 'NP2PTOT_slope', 'NP3TOT_slope', etc.│
-│     Model uses NP3TOT_slope by default (primary target)         │
+│     Keys: 'NP1RTOT_slope', 'NP2PTOT_slope', 'NP3TOT_slope', 'NP4TOT_slope'│
+│     Model predicts all 4 slopes (one per UPDRS total)          │
 │                                                                  │
 │ This format is ready for PPMILongitudinalDataset                │
 │ Note: Called automatically by create_dataloaders() if needed    │
@@ -711,7 +712,7 @@ prepared_data = integrator.prepare_final_dataset()
 feature_vectors = integrator.create_feature_vectors(prepared_data)
 # Returns: {'static_data': Dict[PATNO, {...}], 'longitudinal_data': Dict[PATNO, [...]], 'slopes': Dict[PATNO, Dict[str, float]]}
 # Note: slopes dict contains all computed slopes per patient (NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope)
-#       but model predicts one slope per patient (default: NP3TOT_slope)
+#       Model predicts all 4 slopes per patient (one per UPDRS total)
 
 # Option 3: Auto-convert (calls prepare_final_dataset internally)
 feature_vectors = integrator.create_feature_vectors()
@@ -792,16 +793,14 @@ time_encoding = SinusoidalEncoding(months_since_baseline)
 
 **Slope Head:**
 - Input: Pooled sequence representation
-- Output: One patient-level progression slope per patient (single scalar value)
-- Target: Empirical slope computed from ≥3 visits using linear regression
-  - **Default target**: `NP3TOT_slope` (primary motor progression, most clinically relevant)
-  - Falls back to any available slope if NP3TOT_slope is missing
-- Loss: MSE on the single slope prediction
-
-**Note on Slope Computation:**
-- During data preparation, slopes are computed for **all UPDRS totals** (NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope) and stored per patient
-- However, the model is trained to predict **one slope per patient** (defaulting to NP3TOT_slope)
-- This focuses the model on the most clinically important motor progression metric (NP3TOT)
+- Output: Patient-level progression slopes for all 4 UPDRS totals `[batch, 4]`
+  - NP1RTOT_slope (non-motor progression)
+  - NP2PTOT_slope (motor ADL progression)
+  - NP3TOT_slope (motor examination progression, primary outcome)
+  - NP4TOT_slope (complications progression)
+- Target: Empirical slopes computed from ≥3 visits using linear regression for each UPDRS total
+- Loss: Masked MSE (only valid slopes contribute to loss)
+- Metrics: Per-target MAE, RMSE, and Spearman correlation with support counts
 
 ---
 
@@ -1103,8 +1102,165 @@ results = multi_modal_trainer.train_multiple(
 | Next-visit MAE | < 5 points | On NP3TOT (primary motor outcome, 0-132 scale) |
 | Next-visit MAE | < 3 points | On NP1RTOT, NP2PTOT (0-52 scale) |
 | Next-visit MAE | < 2 points | On NP4TOT (0-24 scale) |
-| Slope correlation | r > 0.5 | With empirical slopes (NP3TOT most important) |
+| Slope Spearman correlation | r > 0.5 | With empirical slopes (per-target, NP3TOT most important) |
 | ON vs OFF gap | 5-10 points | NP3TOT medication effect (NP2PTOT also shows effect) |
+
+---
+
+## Metrics and Evaluation
+
+The model computes comprehensive evaluation metrics that are saved in checkpoints and can be used for model comparison and analysis.
+
+### Metrics Structure
+
+All metrics are computed during validation and stored in checkpoints under `val_metrics` (current epoch) and `best_val_metrics` (best epoch).
+
+#### Next-Visit Metrics (Per-Visit Regression)
+
+**Per-Target Metrics** (one per UPDRS total: NP1RTOT, NP2PTOT, NP3TOT, NP4TOT):
+- **MAE** (Mean Absolute Error): Average absolute difference between predictions and targets
+- **RMSE** (Root Mean Squared Error): Square root of average squared differences
+- **R²** (Coefficient of Determination): Proportion of variance explained
+- **Pearson Correlation**: Linear correlation coefficient
+- **Spearman Correlation**: Rank-based correlation (robust to non-linear relationships)
+- **n_samples**: Number of evaluated samples (support count)
+
+**Per-Δt Bucket Metrics** (grouped by time intervals between visits):
+- Metrics computed separately for different time gaps:
+  - `dt_0_6`: 0-6 months between visits
+  - `dt_6_12`: 6-12 months between visits
+  - `dt_12_24`: 12-24 months between visits
+  - `dt_24_inf`: 24+ months between visits
+- Each bucket includes: MAE, RMSE, and n_samples
+
+**Overall Next-Visit Metrics**:
+- **macro_avg_mae**: Mean of MAEs across all targets (equal weight)
+- **macro_avg_rmse**: Mean of RMSEs across all targets
+- **macro_avg_r2**: Mean of R² values across all targets
+- **macro_avg_correlation**: Mean of Pearson correlations across all targets
+- **macro_avg_spearman**: Mean of Spearman correlations across all targets
+- **weighted_avg_mae**: MAE weighted by number of samples per target
+- **weighted_avg_rmse**: RMSE weighted by number of samples per target
+- **total_samples**: Total number of evaluated samples across all targets
+
+#### Slope Metrics (Patient-Level Regression)
+
+**Per-Target Slope Metrics** (one per UPDRS total slope: NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope):
+- **MAE**: Mean absolute error for slope predictions
+- **RMSE**: Root mean squared error for slope predictions
+- **Spearman Correlation**: Rank-based correlation (important for progression trends)
+- **n_samples**: Number of patients with valid slope labels (support count)
+
+**Overall Slope Metrics**:
+- **mae**: Macro-average MAE across all slope targets
+- **rmse**: Macro-average RMSE across all slope targets
+- **spearman**: Macro-average Spearman correlation across all slope targets
+- **n_samples**: Total number of patients with valid slope labels
+
+### Why Support Counts Matter
+
+**Always check support counts** to avoid misleading metrics:
+- A "good overall average" can hide that one target has almost no evaluated examples
+- Low support counts indicate insufficient data for reliable evaluation
+- Per-target metrics with support counts show where the model is actually being evaluated
+
+**Example**:
+```json
+{
+  "next_visit": {
+    "NP1RTOT": {"mae": 2.5, "n_samples": 1500},
+    "NP2PTOT": {"mae": 3.1, "n_samples": 1480},
+    "NP3TOT": {"mae": 4.8, "n_samples": 1520},
+    "NP4TOT": {"mae": 1.2, "n_samples": 200}  // ⚠️ Low support!
+  }
+}
+```
+
+In this example, NP4TOT has much lower support (200 vs ~1500), so its metrics are less reliable.
+
+### Accessing Metrics
+
+#### From Checkpoints
+
+```python
+import torch
+
+# Load checkpoint
+checkpoint = torch.load('models/checkpoints/best_checkpoint.pt')
+
+# Access metrics
+val_metrics = checkpoint['val_metrics']  # Current epoch metrics
+best_val_metrics = checkpoint['best_val_metrics']  # Best epoch metrics
+
+# Example: Get NP3TOT next-visit MAE
+np3tot_mae = best_val_metrics['next_visit']['NP3TOT']['mae']
+np3tot_n_samples = best_val_metrics['next_visit']['NP3TOT']['n_samples']
+
+# Example: Get overall slope metrics
+slope_mae = best_val_metrics['slope_overall']['mae']
+slope_spearman = best_val_metrics['slope_overall']['spearman']
+```
+
+#### From K-Fold Results
+
+K-fold training saves test metrics to JSON:
+
+```python
+import json
+
+# Load k-fold results
+with open('models/checkpoints/kfold_results.json', 'r') as f:
+    results = json.load(f)
+
+# Access test metrics (if --evaluate-test was used)
+with open('models/checkpoints/test_metrics_best_fold.json', 'r') as f:
+    test_metrics = json.load(f)
+    
+# Test metrics structure
+test_metrics = {
+    'losses': {...},
+    'metrics': {
+        'next_visit': {...},
+        'next_visit_overall': {...},
+        'slope': {...},
+        'slope_overall': {...}
+    }
+}
+```
+
+### Interpreting Metrics
+
+#### Next-Visit Metrics
+
+- **MAE < 5 points** on NP3TOT (0-132 scale) is considered good
+- **MAE < 3 points** on NP1RTOT, NP2PTOT (0-52 scale) is considered good
+- **MAE < 2 points** on NP4TOT (0-24 scale) is considered good
+- **R² > 0.3** indicates meaningful predictive power
+- **Correlation > 0.5** (Pearson or Spearman) shows strong relationship
+
+#### Slope Metrics
+
+- **Spearman correlation > 0.5** indicates good rank-order agreement with empirical slopes
+- **MAE < 0.5 points/month** on NP3TOT_slope is considered good
+- Slope metrics are particularly important for long-term progression tracking
+
+#### Per-Δt Bucket Metrics
+
+- Helps identify if model performance varies by time gap between visits
+- Short-term predictions (0-6 months) may be more accurate than long-term (24+ months)
+- Useful for understanding model limitations at different prediction horizons
+
+### Metric Computation Details
+
+Metrics are computed using:
+- **Masked evaluation**: Only valid (non-NaN) targets contribute to metrics
+- **Per-target computation**: Each UPDRS total is evaluated separately
+- **Support-aware aggregation**: Overall metrics account for varying sample sizes
+
+The metrics computation handles:
+- Missing labels: NaN targets are excluded from evaluation
+- Variable sequence lengths: Padding is masked out
+- Per-target missingness: Different targets may have different availability
 
 ---
 

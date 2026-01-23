@@ -27,10 +27,8 @@ class ModalityEmbedding(nn.Module):
         self.n_features = n_features
         self.d_model = d_model
         
-        # Input dimension is 2x features (values + masks)
-        input_dim = n_features * 2
+        input_dim = n_features * 2  # Values + masks
         
-        # Build MLP
         if hidden_dims is None:
             hidden_dims = [128]
         
@@ -46,63 +44,33 @@ class ModalityEmbedding(nn.Module):
             ])
             prev_dim = hidden_dim
         
-        # Final projection to d_model
         layers.append(nn.Linear(prev_dim, d_model))
-        
         self.mlp = nn.Sequential(*layers)
         
     def forward(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
+        Embed modality features with missingness handling.
+        
         Args:
-            values: [batch, seq_len, n_features] or [batch, n_features] for static
-            mask: [batch, seq_len, n_features] or [batch, n_features], 1 if missing
+            values: Feature values tensor of shape [batch, seq_len, n_features] 
+                    or [batch, n_features] for static features
+            mask: Missingness mask tensor of same shape as values, where 1=missing, 0=present
             
         Returns:
-            embeddings: [batch, seq_len, d_model] or [batch, d_model]
+            Embeddings tensor of shape [batch, seq_len, d_model] or [batch, d_model]
         """
-        # Concatenate values and mask
-        combined = torch.cat([values, mask], dim=-1)  # [..., n_features*2]
-        
-        # Pass through MLP
-        embeddings = self.mlp(combined)  # [..., d_model]
-        
-        return embeddings
+        combined = torch.cat([values, mask], dim=-1)
+        return self.mlp(combined)
 
 
 class StaticFeatureEmbedding(ModalityEmbedding):
     """Embedding for static (patient-level) features"""
-    
-    def __init__(self, n_features: int, d_model: int, hidden_dims: List[int] = [128], dropout: float = 0.1):
-        super().__init__(n_features, d_model, hidden_dims, dropout)
-        
-    def forward(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            values: [batch, n_features]
-            mask: [batch, n_features]
-            
-        Returns:
-            embeddings: [batch, d_model]
-        """
-        return super().forward(values, mask)
+    pass
 
 
 class VisitFeatureEmbedding(ModalityEmbedding):
     """Embedding for time-varying (visit-level) features"""
-    
-    def __init__(self, n_features: int, d_model: int, hidden_dims: List[int] = [128], dropout: float = 0.1):
-        super().__init__(n_features, d_model, hidden_dims, dropout)
-        
-    def forward(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            values: [batch, seq_len, n_features]
-            mask: [batch, seq_len, n_features]
-            
-        Returns:
-            embeddings: [batch, seq_len, d_model]
-        """
-        return super().forward(values, mask)
+    pass
 
 
 class SinusoidalTimeEncoding(nn.Module):
@@ -118,23 +86,20 @@ class SinusoidalTimeEncoding(nn.Module):
         self.d_model = d_model
         self.max_time = max_time
         
-        # Pre-compute division terms
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        self.register_buffer('div_term', div_term)
+        self.register_buffer('div_term', div_term)  # Registered buffers automatically move to GPU
         
     def forward(self, time: torch.Tensor) -> torch.Tensor:
         """
+        Generate sinusoidal positional encoding based on continuous time.
+        
         Args:
-            time: [batch, seq_len] - time in months since baseline
+            time: Time tensor of shape [batch, seq_len] in months since baseline
             
         Returns:
-            time_encoding: [batch, seq_len, d_model]
+            Time encoding tensor of shape [batch, seq_len, d_model]
         """
-        # Normalize time to [0, 1] range
-        time_normalized = time / self.max_time
-        time_normalized = time_normalized.unsqueeze(-1)  # [batch, seq_len, 1]
-        
-        # Create encoding
+        time_normalized = (time / self.max_time).unsqueeze(-1)
         batch_size, seq_len = time.shape
         pe = torch.zeros(batch_size, seq_len, self.d_model, device=time.device)
         
@@ -165,15 +130,10 @@ class VisitTokenBuilder(nn.Module):
         self.d_model = d_model
         self.enabled_modalities = enabled_modalities
         
-        # Number of modalities determines projection input size
         n_modalities = len(enabled_modalities)
-        
         if n_modalities == 0:
             raise ValueError("At least one modality must be enabled")
         
-        # Projection layer to combine modalities
-        # Input: concatenated embeddings from enabled modalities
-        # Output: d_model
         self.projection = nn.Sequential(
             nn.Linear(d_model * n_modalities, d_model),
             nn.LayerNorm(d_model),
@@ -187,16 +147,17 @@ class VisitTokenBuilder(nn.Module):
         seq_len: int
     ) -> torch.Tensor:
         """
+        Build visit tokens by combining embeddings from enabled modalities.
+        
         Args:
-            embeddings: Dict mapping modality name to embedding tensor
-                       - Static: [batch, d_model]
-                       - Time-varying: [batch, seq_len, d_model]
-            seq_len: Sequence length (for expanding static embeddings)
+            embeddings: Dict mapping modality name to embedding tensor.
+                        Static modalities: [batch, d_model]
+                        Time-varying modalities: [batch, seq_len, d_model]
+            seq_len: Sequence length (used to expand static embeddings)
             
         Returns:
-            visit_tokens: [batch, seq_len, d_model]
+            Visit tokens tensor of shape [batch, seq_len, d_model]
         """
-        # Get batch size from first embedding
         first_emb = next(iter(embeddings.values()))
         batch_size = first_emb.shape[0]
         
@@ -206,17 +167,10 @@ class VisitTokenBuilder(nn.Module):
                 raise KeyError(f"Modality '{mod}' enabled but not found in embeddings dict")
             
             emb = embeddings[mod]
-            
-            # Expand static (2D) embeddings to sequence length
-            if emb.dim() == 2:  # [B, d] -> [B, T, d]
+            if emb.dim() == 2:
                 emb = emb.unsqueeze(1).expand(batch_size, seq_len, self.d_model)
             
             components.append(emb)
         
-        # Concatenate all enabled modalities
-        combined = torch.cat(components, dim=-1)  # [B, T, d * n_modalities]
-        
-        # Project to d_model
-        visit_tokens = self.projection(combined)  # [B, T, d]
-        
-        return visit_tokens
+        combined = torch.cat(components, dim=-1)
+        return self.projection(combined)

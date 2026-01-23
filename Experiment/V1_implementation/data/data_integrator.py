@@ -5,8 +5,7 @@ Run this AFTER all individual loaders are working
 
 import pandas as pd
 import numpy as np
-from scipy.stats import linregress
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 import sys
 import os
 
@@ -25,6 +24,9 @@ try:
     from data.loaders.age_at_visit_loader import AgeAtVisitLoader
     from data.visit_index_builder import VisitIndexBuilder
     from data.base_loader import filter_valid_participants
+    from data.utils import FeatureScaler, resolve_data_path
+    from data.feature_engineer import FeatureEngineer
+    from data.label_engineer import LabelEngineer
 except ImportError:
     # Fall back to direct imports if running from data/ directory
     from loaders.genetics_loader import GeneticsLoader
@@ -35,127 +37,18 @@ except ImportError:
     from loaders.age_at_visit_loader import AgeAtVisitLoader
     from visit_index_builder import VisitIndexBuilder
     from base_loader import filter_valid_participants
+    from utils import FeatureScaler, resolve_data_path
+    from feature_engineer import FeatureEngineer
+    from label_engineer import LabelEngineer
 
 
-class FeatureScaler:
-    """
-    Feature scaler for normalizing features to similar scales.
-    Uses z-score normalization (StandardScaler approach) to handle features
-    with different scales (e.g., UPDRS scores 0-100+ vs. percentages 0-1).
-    
-    Handles missing values properly: only normalizes observed values,
-    missing values remain as 0 with mask=1.
-    """
-    
-    def __init__(self):
-        """Initialize empty scaler (must call fit() before use)"""
-        self.means_ = {}
-        self.stds_ = {}
-        self.fitted_ = False
-    
-    def fit(self, feature_dict: Dict[str, np.ndarray], feature_names: List[str]):
-        """
-        Fit scaler on training data.
-        
-        Args:
-            feature_dict: Dict mapping feature names to arrays of observed values
-                         (missing values should be excluded)
-            feature_names: List of feature names in order
-        """
-        self.means_ = {}
-        self.stds_ = {}
-        
-        for i, name in enumerate(feature_names):
-            if name in feature_dict:
-                values = feature_dict[name]
-                # Only use non-missing values for computing statistics
-                valid_values = values[~np.isnan(values)]
-                if len(valid_values) > 0:
-                    self.means_[name] = float(np.mean(valid_values))
-                    std = float(np.std(valid_values))
-                    # Avoid division by zero for constant features
-                    self.stds_[name] = std if std > 1e-8 else 1.0
-                else:
-                    # All values missing - use defaults
-                    self.means_[name] = 0.0
-                    self.stds_[name] = 1.0
-            else:
-                # Feature not in data - use defaults
-                self.means_[name] = 0.0
-                self.stds_[name] = 1.0
-        
-        self.fitted_ = True
-    
-    def transform(self, values: np.ndarray, mask: np.ndarray, feature_names: List[str]) -> np.ndarray:
-        """
-        Normalize feature values using fitted statistics.
-        
-        Args:
-            values: [n_samples, n_features] array of feature values (missing filled with 0)
-            mask: [n_samples, n_features] array where 1=missing, 0=present
-            feature_names: List of feature names in order
-            
-        Returns:
-            Normalized values array (same shape as input)
-        """
-        if not self.fitted_:
-            raise ValueError("Scaler must be fitted before transform")
-        
-        normalized = values.copy()
-        
-        for i, name in enumerate(feature_names):
-            if i >= values.shape[1]:
-                continue
-            
-            if name in self.means_:
-                mean = self.means_[name]
-                std = self.stds_[name]
-                
-                # Only normalize non-missing values (where mask == 0)
-                # Missing values (mask == 1) remain as 0
-                non_missing = (mask[:, i] == 0)
-                if non_missing.any():
-                    normalized[non_missing, i] = (values[non_missing, i] - mean) / std
-        
-        return normalized
-    
-    def fit_transform(self, values: np.ndarray, mask: np.ndarray, feature_names: List[str]) -> np.ndarray:
-        """
-        Fit scaler and transform in one step.
-        
-        Args:
-            values: [n_samples, n_features] array of feature values
-            mask: [n_samples, n_features] array where 1=missing, 0=present
-            feature_names: List of feature names in order
-            
-        Returns:
-            Normalized values array
-        """
-        # Extract observed values for fitting
-        feature_dict = {}
-        for i, name in enumerate(feature_names):
-            if i < values.shape[1]:
-                # Get non-missing values for this feature
-                non_missing = (mask[:, i] == 0)
-                if non_missing.any():
-                    feature_dict[name] = values[non_missing, i]
-        
-        self.fit(feature_dict, feature_names)
-        return self.transform(values, mask, feature_names)
-    
-    def get_params(self) -> Dict:
-        """Get scaler parameters for saving"""
-        return {
-            'means': self.means_,
-            'stds': self.stds_,
-            'fitted': self.fitted_
-        }
-    
-    def set_params(self, params: Dict):
-        """Set scaler parameters from saved state"""
-        self.means_ = params.get('means', {})
-        self.stds_ = params.get('stds', {})
-        self.fitted_ = params.get('fitted', False)
+# Constants
+_VISIT_EVENT_ORDER = {
+    'SC': 0,
+    'BL': 0,
+    **{f'V{i:02d}': i for i in range(1, 26)}
+}
+_DEFAULT_VISIT_ORDER = 999  # For unknown event IDs
 
 
 class DataIntegrator:
@@ -176,23 +69,21 @@ class DataIntegrator:
         self.config = config
         self.base_dir = config.data.base_dir
         self.normalize_features = normalize_features
+
+        self.feature_engineer = FeatureEngineer(config, normalize_features=normalize_features)
+        self.label_engineer = LabelEngineer(config)
+
+        self.static_scaler = self.feature_engineer.static_scaler
+        self.motor_scaler = self.feature_engineer.motor_scaler
+        self.updrs_supplementary_scaler = self.feature_engineer.updrs_supplementary_scaler
+        self.non_motor_scaler = self.feature_engineer.non_motor_scaler
+        self.medication_scaler = self.feature_engineer.medication_scaler
+        self.age_at_visit_scaler = self.feature_engineer.age_at_visit_scaler
         
-        # Initialize feature scalers (one per feature type)
-        self.static_scaler = FeatureScaler() if normalize_features else None
-        self.motor_scaler = FeatureScaler() if normalize_features else None
-        self.updrs_supplementary_scaler = FeatureScaler() if normalize_features else None
-        self.non_motor_scaler = FeatureScaler() if normalize_features else None
-        self.medication_scaler = FeatureScaler() if normalize_features else None
-        self.age_at_visit_scaler = FeatureScaler() if normalize_features else None
-        
-        # Load participant_status once and share across all loaders
         print("Loading participant status (shared across all loaders)...")
         self.valid_participants = self._load_valid_participants(config)
         print(f"  ✓ Loaded {len(self.valid_participants)} valid participants")
         
-        # Initialize all loaders with shared valid_participants
-        # Loaders return ALL valid participants (no min_visits filtering)
-        # Use VisitIndexBuilder.filter_by_min_visits() for patient filtering
         print("\nInitializing loaders...")
         self.genetics_loader = GeneticsLoader(self.base_dir, config, valid_participants=self.valid_participants)
         self.demographics_loader = DemographicsLoader(self.base_dir, config, valid_participants=self.valid_participants)
@@ -212,24 +103,359 @@ class DataIntegrator:
         Returns:
             DataFrame with filtered valid participants (all columns)
         """
-        import os
-        
-        def resolve_path(file_path):
-            """Resolve file path, handling relative paths that start with ../"""
-            if os.path.isabs(file_path):
-                return file_path
-            if file_path.startswith('../'):
-                return os.path.normpath(os.path.abspath(file_path))
-            return os.path.normpath(os.path.join(self.base_dir, file_path))
-        
-        # Resolve participant status path
-        status_path = resolve_path(config.data.participant_status)
-        
+        status_path = resolve_data_path(self.base_dir, config.data.participant_status)
         full_df = pd.read_csv(status_path)
-        # Use shared utility function from base_loader
-        df = filter_valid_participants(full_df)
+        return filter_valid_participants(full_df)
+    
+    def _load_with_fallback(self, loader, loader_name: str) -> pd.DataFrame:
+        """
+        Load data with graceful fallback to empty DataFrame.
         
-        return df
+        Args:
+            loader: Loader instance with .load() method
+            loader_name: Human-readable name for error messages
+            
+        Returns:
+            DataFrame with loaded data or empty DataFrame with PATNO/EVENT_ID columns
+        """
+        try:
+            return loader.load()
+        except Exception as e:
+            print(f"  ⚠️  {loader_name} not available: {e}")
+            return pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
+    
+    def _extract_modality_features(
+        self,
+        df: pd.DataFrame,
+        patno: int,
+        event_id: str,
+        feature_cols: List[str],
+        scaler: FeatureScaler
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Extract features for a modality at a visit.
+        
+        Args:
+            df: Source DataFrame
+            patno: Patient number
+            event_id: Event ID
+            feature_cols: List of feature column names
+            scaler: FeatureScaler instance (can be None)
+            
+        Returns:
+            Tuple of (values, mask) arrays
+        """
+        visit_data = df[(df['PATNO'] == patno) & (df['EVENT_ID'] == event_id)]
+        
+        if len(visit_data) > 0 and feature_cols:
+            values, mask = self.create_missingness_masks(visit_data, feature_cols, scaler=scaler)
+            return values[0], mask[0]
+        else:
+            n_features = len(feature_cols) if feature_cols else 0
+            return (
+                np.zeros(n_features, dtype=np.float32),
+                np.ones(n_features, dtype=np.float32)
+            )
+    
+    def _fit_scaler_for_features(
+        self,
+        feature_attr_name: str,
+        df: pd.DataFrame,
+        scaler: FeatureScaler,
+        scaler_name: str
+    ) -> None:
+        """
+        Fit a scaler for a given feature set.
+        
+        Args:
+            feature_attr_name: Attribute name in config.features (e.g., 'motor_features')
+            df: DataFrame containing the features
+            scaler: FeatureScaler instance (can be None)
+            scaler_name: Human-readable name for logging
+        """
+        if scaler is None:
+            return
+            
+        features = getattr(self.config.features, feature_attr_name, [])
+        if not isinstance(features, (list, tuple, set)) or not features:
+            return
+        
+        feature_cols = [c for c in features if c in df.columns]
+        if feature_cols:
+            values, mask = self.create_missingness_masks(df, feature_cols, scaler=None)
+            scaler.fit_transform(values, mask, feature_cols)
+            print(f"  ✓ Fitted {scaler_name} scaler: {len(feature_cols)} features")
+    
+    def _initialize_slopes_dict(self, patnos: List[int]) -> Dict[int, Dict[str, float]]:
+        self._ensure_scalers_exist()
+        return self.label_engineer.initialize_slope_dict(patnos)
+    
+    def _fill_slopes_from_df(self, slopes: Dict[int, Dict[str, float]], slopes_df: pd.DataFrame) -> None:
+        self._ensure_scalers_exist()
+        self.label_engineer.fill_slope_dict_from_df(slopes, slopes_df)
+    
+    def _load_and_merge_static_data(self) -> pd.DataFrame:
+        """Load and merge static (patient-level) data from genetics and demographics."""
+        print("\n--- Loading Static Data ---")
+        genetics_df = self.genetics_loader.load()
+        demographics_df = self.demographics_loader.load()
+        static_df = demographics_df.merge(genetics_df, on='PATNO', how='outer')
+        print(f"\n✓ Static data merged: {len(static_df)} patients, {len(static_df.columns)-1} features")
+        return static_df
+    
+    def _load_and_merge_longitudinal_data(self) -> pd.DataFrame:
+        """Load and merge all longitudinal (visit-level) data."""
+        print("\n--- Loading Longitudinal Data ---")
+        updrs_df = self.updrs_loader.load()
+        
+        non_motor_df = self._load_with_fallback(self.non_motor_loader, "Non-motor assessments")
+        medication_df = self._load_with_fallback(self.medication_loader, "Medication data")
+        age_at_visit_df = self._load_with_fallback(self.age_at_visit_loader, "Age at visit data")
+        
+        longitudinal_df = updrs_df.copy()
+        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, non_motor_df, '_non_motor')
+        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, medication_df, '_med')
+        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, age_at_visit_df, '_age')
+        
+        return longitudinal_df
+    
+    def _ensure_scalers_exist(self):
+        if not hasattr(self, "feature_engineer") or self.feature_engineer is None:
+            normalize_features = bool(getattr(self, "normalize_features", True))
+            self.feature_engineer = FeatureEngineer(self.config, normalize_features=normalize_features)
+
+        if not hasattr(self, "label_engineer") or self.label_engineer is None:
+            self.label_engineer = LabelEngineer(self.config)
+
+        self.static_scaler = getattr(self.feature_engineer, "static_scaler", None)
+        self.motor_scaler = getattr(self.feature_engineer, "motor_scaler", None)
+        self.updrs_supplementary_scaler = getattr(self.feature_engineer, "updrs_supplementary_scaler", None)
+        self.non_motor_scaler = getattr(self.feature_engineer, "non_motor_scaler", None)
+        self.medication_scaler = getattr(self.feature_engineer, "medication_scaler", None)
+        self.age_at_visit_scaler = getattr(self.feature_engineer, "age_at_visit_scaler", None)
+    
+    def _process_static_features_vectorized(self, static_df: pd.DataFrame) -> Dict[int, Dict]:
+        self._ensure_scalers_exist()
+        return self.feature_engineer._process_static_features_vectorized(static_df)
+    
+    def _get_feature_columns_from_config(
+        self, 
+        df: pd.DataFrame, 
+        feature_attr_names: List[str]
+    ) -> Dict[str, List[str]]:
+        self._ensure_scalers_exist()
+        return self.feature_engineer._get_feature_columns_from_config(df, feature_attr_names)
+    
+    def _extract_all_visit_features(
+        self,
+        group: pd.DataFrame,
+        feature_cols: List[str],
+        scaler: FeatureScaler
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        self._ensure_scalers_exist()
+        return self.feature_engineer._extract_all_visit_features(group, feature_cols, scaler)
+    
+    def _sort_visits_by_time(self, group: pd.DataFrame) -> pd.DataFrame:
+        self._ensure_scalers_exist()
+        return self.feature_engineer._sort_visits_by_time(group)
+    
+    def _process_longitudinal_features_vectorized(self, longitudinal_df: pd.DataFrame) -> Dict[int, List[Dict]]:
+        self._ensure_scalers_exist()
+        return self.feature_engineer._process_longitudinal_features_vectorized(longitudinal_df)
+    
+    def _filter_to_complete_cases(self, data: Dict) -> Dict:
+        """Filter to only patients with both static and longitudinal data."""
+        patients_with_both = set(data['static']['PATNO']) & set(data['longitudinal']['PATNO'])
+        print(f"\n--- Filtering to Complete Cases ---")
+        print(f"  Patients with static data: {len(data['static'])}")
+        print(f"  Patients with longitudinal data: {data['longitudinal']['PATNO'].nunique()}")
+        print(f"  Patients with both: {len(patients_with_both)}")
+        
+        data['static'] = data['static'][data['static']['PATNO'].isin(patients_with_both)]
+        data['longitudinal'] = data['longitudinal'][data['longitudinal']['PATNO'].isin(patients_with_both)]
+        return data
+    
+    def _create_metadata(self, data: Dict, slopes_df: pd.DataFrame) -> Dict:
+        """Create metadata dictionary for the integrated dataset."""
+        return {
+            'n_patients': len(data['static']),
+            'n_visits': len(data['longitudinal']),
+            'n_with_slopes': len(slopes_df),
+            'static_features': [c for c in data['static'].columns if c != 'PATNO'],
+            'longitudinal_features': [c for c in data['longitudinal'].columns 
+                                     if c not in ['PATNO', 'EVENT_ID', 'INFODT', 'visit_date']],
+            'updrs_totals': [c for c in data['longitudinal'].columns 
+                            if c in self.config.features.all_updrs_totals]
+        }
+    
+    def _load_raw_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Load raw DataFrames from all loaders."""
+        print("\n--- Loading Raw Data ---")
+        genetics_df = self.genetics_loader.load()
+        demographics_df = self.demographics_loader.load()
+        updrs_df = self.updrs_loader.load()
+        
+        non_motor_df = self._load_with_fallback(self.non_motor_loader, "Non-motor data")
+        medication_df = self._load_with_fallback(self.medication_loader, "Medication data")
+        age_at_visit_df = self._load_with_fallback(self.age_at_visit_loader, "Age at visit data")
+        
+        static_df = demographics_df.merge(genetics_df, on='PATNO', how='outer')
+        return static_df, updrs_df, non_motor_df, medication_df, age_at_visit_df
+    
+    def _build_visit_index(
+        self, 
+        source_dfs: List[pd.DataFrame], 
+        min_visits: int
+    ) -> Tuple[pd.DataFrame, np.ndarray]:
+        """Build visit index from all longitudinal sources and filter by minimum visits."""
+        print("\n--- Building Visit Index (Master Timeline) ---")
+        visit_index_builder = VisitIndexBuilder(self.config)
+        
+        visit_index = visit_index_builder.build_from_sources(
+            source_dfs=source_dfs,
+            valid_patnos=self.valid_participants['PATNO'].tolist()
+        )
+        visit_index = visit_index_builder.filter_by_min_visits(visit_index, min_visits)
+        valid_patnos = visit_index['PATNO'].unique()
+        
+        return visit_index, valid_patnos
+    
+    def _create_static_feature_vectors(
+        self, 
+        static_df: pd.DataFrame, 
+        valid_patnos: np.ndarray
+    ) -> Dict[int, Dict]:
+        """Create static feature vectors for valid patients."""
+        print("\n--- Creating Static Feature Vectors ---")
+        static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
+        static_data = {}
+        
+        for patno in valid_patnos:
+            patient_row = static_df[static_df['PATNO'] == patno]
+            if len(patient_row) == 0:
+                static_data[patno] = {
+                    'values': np.zeros(len(static_cols), dtype=np.float32),
+                    'mask': np.ones(len(static_cols), dtype=np.float32)
+                }
+            else:
+                feature_cols = [c for c in static_cols if c != 'PATNO']
+                values, mask = self.create_missingness_masks(patient_row, feature_cols, scaler=self.static_scaler)
+                static_data[patno] = {
+                    'values': values[0],
+                    'mask': mask[0]
+                }
+        
+        print(f"  ✓ Static features: {len(static_cols)} features for {len(static_data)} patients")
+        return static_data
+    
+    def _align_modalities_to_visit_index(
+        self,
+        visit_index: pd.DataFrame,
+        valid_patnos: np.ndarray,
+        updrs_df: pd.DataFrame,
+        non_motor_df: pd.DataFrame,
+        medication_df: pd.DataFrame,
+        age_at_visit_df: pd.DataFrame,
+        motor_cols: List[str],
+        updrs_supplementary_cols: List[str],
+        non_motor_cols: List[str],
+        med_cols: List[str],
+        age_at_visit_cols: List[str]
+    ) -> Dict[int, List[Dict]]:
+        """Align all modalities to the visit index timeline."""
+        longitudinal_data = {}
+        
+        for patno in valid_patnos:
+            patient_visits = visit_index[visit_index['PATNO'] == patno].sort_values('visit_order')
+            visits = []
+            
+            for _, visit_row in patient_visits.iterrows():
+                event_id = visit_row['EVENT_ID']
+                visit_dict = {}
+                
+                motor_values, motor_mask = self._extract_modality_features(
+                    updrs_df, patno, event_id, motor_cols, self.motor_scaler
+                )
+                visit_dict['motor_values'] = motor_values
+                visit_dict['motor_mask'] = motor_mask
+                
+                updrs_supplementary_values, updrs_supplementary_mask = self._extract_modality_features(
+                    updrs_df, patno, event_id, updrs_supplementary_cols, self.updrs_supplementary_scaler
+                )
+                visit_dict['updrs_supplementary_values'] = updrs_supplementary_values
+                visit_dict['updrs_supplementary_mask'] = updrs_supplementary_mask
+                
+                non_motor_values, non_motor_mask = self._extract_modality_features(
+                    non_motor_df, patno, event_id, non_motor_cols, self.non_motor_scaler
+                )
+                visit_dict['nonmotor_values'] = non_motor_values
+                visit_dict['nonmotor_mask'] = non_motor_mask
+                
+                med_values, med_mask = self._extract_modality_features(
+                    medication_df, patno, event_id, med_cols, self.medication_scaler
+                )
+                visit_dict['med_values'] = med_values
+                visit_dict['med_mask'] = med_mask
+                
+                age_at_visit_values, age_at_visit_mask = self._extract_modality_features(
+                    age_at_visit_df, patno, event_id, age_at_visit_cols, self.age_at_visit_scaler
+                )
+                visit_dict['age_at_visit_values'] = age_at_visit_values
+                visit_dict['age_at_visit_mask'] = age_at_visit_mask
+                
+                metadata = self._extract_visit_metadata(visit_row, updrs_df, patno, event_id)
+                visit_dict.update(metadata)
+                visits.append(visit_dict)
+            
+            longitudinal_data[patno] = visits
+        
+        print(f"  ✓ Longitudinal data: {sum(len(v) for v in longitudinal_data.values())} visits")
+        print(f"    Motor features: {len(motor_cols)}")
+        print(f"    UPDRS supplementary features: {len(updrs_supplementary_cols)}")
+        print(f"    Non-motor features: {len(non_motor_cols)}")
+        print(f"    Medication features: {len(med_cols)}")
+        
+        return longitudinal_data
+    
+    def _extract_visit_metadata(
+        self,
+        visit_row: pd.Series,
+        updrs_df: pd.DataFrame,
+        patno: int,
+        event_id: str
+    ) -> Dict[str, Union[float, int, np.ndarray]]:
+        """
+        Extract time and UPDRS totals for a visit.
+        
+        Args:
+            visit_row: Row from visit_index
+            updrs_df: DataFrame with UPDRS totals
+            patno: Patient number
+            event_id: Event ID
+            
+        Returns:
+            Dictionary with time_months, delta_months, visit_order, updrs_totals, np3tot
+        """
+        metadata = {
+            'time_months': float(visit_row.get('months_since_baseline', 0.0) or 0.0),
+            'delta_months': float(visit_row.get('delta_months', 0.0) or 0.0),
+            'visit_order': int(visit_row.get('visit_order', 0))
+        }
+        
+        updrs_visit = updrs_df[(updrs_df['PATNO'] == patno) & (updrs_df['EVENT_ID'] == event_id)]
+        updrs_values = []
+        for total in self.config.features.all_updrs_totals:
+            if len(updrs_visit) > 0 and total in updrs_visit.columns:
+                val = updrs_visit[total].iloc[0]
+                val = float(val) if pd.notna(val) else np.nan
+            else:
+                val = np.nan
+            updrs_values.append(val)
+        
+        metadata['updrs_totals'] = np.array(updrs_values, dtype=np.float32)
+        metadata['np3tot'] = updrs_values[2] if len(updrs_values) > 2 else np.nan
+        
+        return metadata
     
     def _merge_longitudinal_data(self, longitudinal_df: pd.DataFrame, new_df: pd.DataFrame, suffix: str) -> pd.DataFrame:
         """
@@ -251,10 +477,8 @@ class DataIntegrator:
                 how='outer',
                 suffixes=('', suffix)
             )
-            # Keep the first months_since_baseline if there are duplicates
             months_col = f'months_since_baseline{suffix}'
             if months_col in longitudinal_df.columns:
-                # Ensure numeric types to avoid FutureWarning about downcasting
                 longitudinal_df['months_since_baseline'] = pd.to_numeric(
                     longitudinal_df['months_since_baseline'], errors='coerce'
                 )
@@ -279,44 +503,10 @@ class DataIntegrator:
         print("LOADING ALL DATA")
         print("=" * 80)
         
-        # Load static data (patient-level)
-        print("\n--- Loading Static Data ---")
-        genetics_df = self.genetics_loader.load()
-        demographics_df = self.demographics_loader.load()
+        static_df = self._load_and_merge_static_data()
+        longitudinal_df = self._load_and_merge_longitudinal_data()
         
-        # Merge static data
-        static_df = demographics_df.merge(genetics_df, on='PATNO', how='outer')
-        print(f"\n✓ Static data merged_dataset: {len(static_df)} patients, {len(static_df.columns)-1} features")
-        
-        # Load longitudinal data (visit-level)
-        print("\n--- Loading Longitudinal Data ---")
-        updrs_df = self.updrs_loader.load()
-        
-        try:
-            non_motor_df = self.non_motor_loader.load()
-        except:
-            print("  ⚠️  Non-motor assessments not available, continuing without them")
-            non_motor_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
-        
-        try:
-            medication_df = self.medication_loader.load()
-        except:
-            print("  ⚠️  Medication data not available, continuing without it")
-            medication_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
-        
-        try:
-            age_at_visit_df = self.age_at_visit_loader.load()
-        except:
-            print("  ⚠️  Age at visit data not available, continuing without it")
-            age_at_visit_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
-        
-        # Merge longitudinal data
-        longitudinal_df = updrs_df.copy()
-        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, non_motor_df, '_non_motor')
-        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, medication_df, '_med')
-        longitudinal_df = self._merge_longitudinal_data(longitudinal_df, age_at_visit_df, '_age')
-        
-        print(f"\n✓ Longitudinal data merged_dataset: {len(longitudinal_df)} visits, {len(longitudinal_df.columns)-3} features")
+        print(f"\n✓ Longitudinal data merged: {len(longitudinal_df)} visits, {len(longitudinal_df.columns)-3} features")
         print(f"  Visits per patient: {len(longitudinal_df) / longitudinal_df['PATNO'].nunique():.1f} average")
         
         return {
@@ -325,64 +515,8 @@ class DataIntegrator:
         }
     
     def compute_progression_slopes(self, longitudinal_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Compute empirical progression slopes for each patient
-        
-        Args:
-            longitudinal_df: Longitudinal data with PATNO, months_since_baseline, and UPDRS totals
-            
-        Returns:
-            DataFrame with PATNO and slope for each UPDRS total
-        """
-        print("\n--- Computing Progression Slopes ---")
-        
-        min_visits = self.config.training.min_visits_for_slope
-        slopes_data = []
-        
-        for patno, group in longitudinal_df.groupby('PATNO'):
-            # Filter to visits with valid time
-            valid_group = group.dropna(subset=['months_since_baseline'])
-            
-            if len(valid_group) < min_visits:
-                continue
-            
-            times = valid_group['months_since_baseline'].values
-            slope_entry = {'PATNO': patno, 'n_visits': len(valid_group)}
-            
-            # Compute slope for each UPDRS total
-            for total in self.config.features.all_updrs_totals:
-                if total in valid_group.columns:
-                    scores = valid_group[total].dropna()
-                    times_for_total = valid_group.loc[scores.index, 'months_since_baseline'].values
-                    
-                    if len(scores) >= min_visits:
-                        # Check that we have at least 2 unique time points for regression
-                        # Skip if all times are identical (variance is zero)
-                        times_std = pd.Series(times_for_total).std()
-                        if pd.isna(times_std) or times_std == 0:
-                            # Skip if all visits are at the same time point (cannot compute slope)
-                            continue
-                        
-                        result = linregress(times_for_total, scores.values)
-                        slope_entry[f'{total}_slope'] = result.slope
-                        slope_entry[f'{total}_r'] = result.rvalue
-                        slope_entry[f'{total}_p'] = result.pvalue
-            
-            if len(slope_entry) > 2:  # Has at least one slope
-                slopes_data.append(slope_entry)
-        
-        slopes_df = pd.DataFrame(slopes_data)
-        
-        print(f"✓ Computed slopes for {len(slopes_df)} patients")
-        for total in self.config.features.all_updrs_totals:
-            slope_col = f'{total}_slope'
-            if slope_col in slopes_df.columns:
-                n_slopes = slopes_df[slope_col].notna().sum()
-                mean_slope = slopes_df[slope_col].mean()
-                std_slope = slopes_df[slope_col].std()
-                print(f"  {total}: {mean_slope:.3f} ± {std_slope:.3f} points/month (n={n_slopes})")
-        
-        return slopes_df
+        self._ensure_scalers_exist()
+        return self.label_engineer.compute_progression_slopes(longitudinal_df)
     
     def create_missingness_masks(
         self, 
@@ -390,55 +524,8 @@ class DataIntegrator:
         feature_cols: List[str],
         scaler: FeatureScaler = None
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Create value and mask arrays for a set of features.
-        Handles missing values by creating explicit masks.
-        Converts non-numeric columns to numeric where possible.
-        Optionally normalizes features using a fitted scaler.
-        
-        Args:
-            df: DataFrame containing features
-            feature_cols: List of column names to extract
-            scaler: Optional FeatureScaler to normalize features (if None, no normalization)
-            
-        Returns:
-            Tuple of (values, mask) arrays where mask is 1 for missing, 0 for present
-        """
-        # Extract only available columns
-        available_cols = [c for c in feature_cols if c in df.columns]
-        if not available_cols:
-            # Return empty arrays if no columns available
-            return np.array([]).reshape(len(df), 0).astype(np.float32), \
-                   np.array([]).reshape(len(df), 0).astype(np.float32)
-        
-        # Extract subset of DataFrame with only the features we need
-        feature_df = df[available_cols].copy()
-        
-        # Convert all columns to numeric, coercing errors to NaN
-        # This handles string columns, categoricals, etc.
-        for col in available_cols:
-            if feature_df[col].dtype == 'object':
-                # Try to convert to numeric
-                feature_df[col] = pd.to_numeric(feature_df[col], errors='coerce')
-            elif feature_df[col].dtype.name == 'category':
-                # Convert categorical to numeric codes
-                feature_df[col] = pd.to_numeric(feature_df[col].cat.codes, errors='coerce')
-        
-        # Now extract as numeric array
-        values = feature_df.values.astype(np.float32)
-        
-        # Create mask for missing values (handles NaN, None, etc.)
-        # Use pandas isna() which works for all dtypes, then convert to numpy
-        mask = feature_df.isna().values.astype(np.float32)
-        
-        # Fill NaN with 0 (the mask tells the model it's missing)
-        values = np.nan_to_num(values, nan=0.0)
-        
-        # Apply normalization if scaler is provided and fitted
-        if scaler is not None and scaler.fitted_:
-            values = scaler.transform(values, mask, available_cols)
-        
-        return values, mask
+        self._ensure_scalers_exist()
+        return self.feature_engineer.create_missingness_masks(df, feature_cols, scaler=scaler)
     
     def fit_scalers(self, prepared_data: Dict, train_patnos: List[int] = None):
         """
@@ -450,86 +537,14 @@ class DataIntegrator:
             train_patnos: Optional list of training patient IDs to fit on.
                          If None, fits on all patients in prepared_data.
         """
-        if not self.normalize_features:
-            return
-        
-        print("\n--- Fitting Feature Scalers on Training Data ---")
-        
-        static_df = prepared_data['static']
-        longitudinal_df = prepared_data['longitudinal']
-        
-        # Filter to training patients if provided
-        if train_patnos is not None:
-            static_df = static_df[static_df['PATNO'].isin(train_patnos)]
-            longitudinal_df = longitudinal_df[longitudinal_df['PATNO'].isin(train_patnos)]
-        
-        # Fit static scaler
-        static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
-        if static_cols and self.static_scaler:
-            static_values, static_mask = self.create_missingness_masks(
-                static_df, static_cols, scaler=None  # Don't normalize yet
-            )
-            self.static_scaler.fit_transform(static_values, static_mask, static_cols)
-            print(f"  ✓ Fitted static scaler: {len(static_cols)} features")
-        
-        # Fit motor scaler
-        motor_features = getattr(self.config.features, 'motor_features', [])
-        if isinstance(motor_features, (list, tuple, set)) and motor_features:
-            motor_cols = [c for c in motor_features if c in longitudinal_df.columns]
-            if motor_cols and self.motor_scaler:
-                motor_values, motor_mask = self.create_missingness_masks(
-                    longitudinal_df, motor_cols, scaler=None
-                )
-                self.motor_scaler.fit_transform(motor_values, motor_mask, motor_cols)
-                print(f"  ✓ Fitted motor scaler: {len(motor_cols)} features")
-        
-        # Fit UPDRS supplementary scaler
-        updrs_supplementary_features = getattr(self.config.features, 'updrs_supplementary_features', [])
-        if isinstance(updrs_supplementary_features, (list, tuple, set)) and updrs_supplementary_features:
-            updrs_supplementary_cols = [c for c in updrs_supplementary_features if c in longitudinal_df.columns]
-            if updrs_supplementary_cols and self.updrs_supplementary_scaler:
-                updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
-                    longitudinal_df, updrs_supplementary_cols, scaler=None
-                )
-                self.updrs_supplementary_scaler.fit_transform(
-                    updrs_supplementary_values, updrs_supplementary_mask, updrs_supplementary_cols
-                )
-                print(f"  ✓ Fitted UPDRS supplementary scaler: {len(updrs_supplementary_cols)} features")
-        
-        # Fit non-motor scaler
-        non_motor_features = getattr(self.config.features, 'non_motor_features', [])
-        if isinstance(non_motor_features, (list, tuple, set)) and non_motor_features:
-            non_motor_cols = [c for c in non_motor_features if c in longitudinal_df.columns]
-            if non_motor_cols and self.non_motor_scaler:
-                non_motor_values, non_motor_mask = self.create_missingness_masks(
-                    longitudinal_df, non_motor_cols, scaler=None
-                )
-                self.non_motor_scaler.fit_transform(non_motor_values, non_motor_mask, non_motor_cols)
-                print(f"  ✓ Fitted non-motor scaler: {len(non_motor_cols)} features")
-        
-        # Fit medication scaler
-        medication_features = getattr(self.config.features, 'medication_features', [])
-        if isinstance(medication_features, (list, tuple, set)) and medication_features:
-            med_cols = [c for c in medication_features if c in longitudinal_df.columns]
-            if med_cols and self.medication_scaler:
-                med_values, med_mask = self.create_missingness_masks(
-                    longitudinal_df, med_cols, scaler=None
-                )
-                self.medication_scaler.fit_transform(med_values, med_mask, med_cols)
-                print(f"  ✓ Fitted medication scaler: {len(med_cols)} features")
-
-        # Fit age at visit scaler
-        age_at_visit_features = getattr(self.config.features, 'age_at_visit_features', [])
-        if isinstance(age_at_visit_features, (list, tuple, set)) and age_at_visit_features:
-            age_at_visit_cols = [c for c in age_at_visit_features if c in longitudinal_df.columns]
-            if age_at_visit_cols and self.age_at_visit_scaler:
-                age_at_visit_value, age_at_visit_mask = self.create_missingness_masks(
-                    longitudinal_df, age_at_visit_cols, scaler=None
-                )
-                self.age_at_visit_scaler.fit_transform(age_at_visit_value, age_at_visit_mask, age_at_visit_cols)
-                print(f"  ✓ Fitted age_at_visit scaler: {len(age_at_visit_cols)} features")
-        
-        print("  ✓ All scalers fitted")
+        self._ensure_scalers_exist()
+        self.feature_engineer.fit_scalers(prepared_data, train_patnos=train_patnos)
+        self.static_scaler = self.feature_engineer.static_scaler
+        self.motor_scaler = self.feature_engineer.motor_scaler
+        self.updrs_supplementary_scaler = self.feature_engineer.updrs_supplementary_scaler
+        self.non_motor_scaler = self.feature_engineer.non_motor_scaler
+        self.medication_scaler = self.feature_engineer.medication_scaler
+        self.age_at_visit_scaler = self.feature_engineer.age_at_visit_scaler
     
     def create_feature_vectors(self, prepared_data: Dict = None) -> Dict:
         """
@@ -556,225 +571,14 @@ class DataIntegrator:
         longitudinal_df = prepared_data['longitudinal']
         slopes_df = prepared_data['slopes']
         
-        # Ensure scalers exist (may not be initialized if __init__ was mocked)
-        if not hasattr(self, 'static_scaler'):
-            self.static_scaler = None
-        if not hasattr(self, 'motor_scaler'):
-            self.motor_scaler = None
-        if not hasattr(self, 'updrs_supplementary_scaler'):
-            self.updrs_supplementary_scaler = None
-        if not hasattr(self, 'non_motor_scaler'):
-            self.non_motor_scaler = None
-        if not hasattr(self, 'medication_scaler'):
-            self.medication_scaler = None
-        
-        # Static Features 
-        static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
-        
-        # Optimized: Process all static features at once (vectorized)
-        # Ensure one row per patient (take first if duplicates exist)
-        static_df_unique = static_df.drop_duplicates(subset='PATNO', keep='first')
-        patient_list = static_df_unique['PATNO'].values
-        
-        print(f"    Processing static features for {len(patient_list)} patients (vectorized)...")
-        # Get feature columns (exclude PATNO)
-        feature_cols = [c for c in static_cols if c != 'PATNO']
-        
-        # Process all patients at once - much faster!
-        all_values, all_masks = self.create_missingness_masks(
-            static_df_unique,
-            feature_cols,
-            scaler=self.static_scaler
-        )
-        
-        # Split into per-patient dictionaries
-        static_data = {}
-        for i, patno in enumerate(patient_list):
-            static_data[patno] = {
-                'values': all_values[i],
-                'mask': all_masks[i]
-            }
-        
-        # Longitudinal Features
-        longitudinal_data = {}
-        
-        if not longitudinal_df.empty:
-            # Get feature column lists from config
-            # Use getattr with defaults so tests can provide partial mock configs
-            motor_features = getattr(self.config.features, 'motor_features', [])
-            updrs_supplementary_features = getattr(self.config.features, 'updrs_supplementary_features', [])
-            non_motor_features = getattr(self.config.features, 'non_motor_features', [])
-            medication_features = getattr(self.config.features, 'medication_features', [])
+        self._ensure_scalers_exist()
+        features = self.feature_engineer.create_feature_vectors(prepared_data)
+        static_data = features["static_data"]
+        longitudinal_data = features["longitudinal_data"]
 
-            # If a Mock() provides attributes but they aren't iterable lists, treat as empty.
-            if not isinstance(motor_features, (list, tuple, set)):
-                motor_features = []
-            if not isinstance(updrs_supplementary_features, (list, tuple, set)):
-                updrs_supplementary_features = []
-            if not isinstance(non_motor_features, (list, tuple, set)):
-                non_motor_features = []
-            if not isinstance(medication_features, (list, tuple, set)):
-                medication_features = []
-
-            motor_cols = [c for c in motor_features if c in longitudinal_df.columns]
-            updrs_supplementary_cols = [c for c in updrs_supplementary_features if c in longitudinal_df.columns]
-            non_motor_cols = [c for c in non_motor_features if c in longitudinal_df.columns]
-            med_cols = [c for c in medication_features if c in longitudinal_df.columns]
-            
-            # Get age_at_visit columns
-            age_at_visit_features = getattr(self.config.features, 'age_at_visit_features', [])
-            if isinstance(age_at_visit_features, (list, tuple, set)) and age_at_visit_features:
-                age_at_visit_cols = [c for c in age_at_visit_features if c in longitudinal_df.columns]
-            else:
-                age_at_visit_cols = []
-            
-            # Pre-compute event order mapping (used for sorting visits)
-            event_order = {'SC': 0, 'BL': 0}
-            for i in range(1, 26):
-                event_order[f'V{i:02d}'] = i
-            
-            # Group by patient
-            patient_groups = list(longitudinal_df.groupby('PATNO'))
-            print(f"    Processing longitudinal data for {len(patient_groups)} patients...")
-            for i, (patno, group) in enumerate(patient_groups):
-                if (i + 1) % 200 == 0:
-                    print(f"    Processing longitudinal data: {i + 1}/{len(patient_groups)} patients...")
-                # Sort by time (months_since_baseline or EVENT_ID order)
-                if 'months_since_baseline' in group.columns:
-                    group = group.sort_values('months_since_baseline')
-                elif 'EVENT_ID' in group.columns:
-                    # Sort by visit order using pre-computed mapping
-                    group = group.copy()
-                    group['_visit_order'] = group['EVENT_ID'].map(lambda x: event_order.get(x, 999))
-                    group = group.sort_values('_visit_order').drop(columns=['_visit_order'])
-                
-                n_visits = len(group)
-                visits = []
-                
-                # OPTIMIZATION: Process all visits at once for each feature type (vectorized)
-                # This is much faster than processing visits one-by-one
-                
-                # Motor features - process all visits at once
-                if motor_cols:
-                    all_motor_values, all_motor_masks = self.create_missingness_masks(
-                        group,  # Process entire group DataFrame at once
-                        motor_cols,
-                        scaler=self.motor_scaler
-                    )
-                else:
-                    all_motor_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                    all_motor_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                
-                # UPDRS supplementary features - process all visits at once
-                if updrs_supplementary_cols:
-                    all_updrs_supplementary_values, all_updrs_supplementary_masks = self.create_missingness_masks(
-                        group,
-                        updrs_supplementary_cols,
-                        scaler=self.updrs_supplementary_scaler
-                    )
-                else:
-                    all_updrs_supplementary_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                    all_updrs_supplementary_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                
-                # Non-motor features - process all visits at once
-                if non_motor_cols:
-                    all_non_motor_values, all_non_motor_masks = self.create_missingness_masks(
-                        group,
-                        non_motor_cols,
-                        scaler=self.non_motor_scaler
-                    )
-                else:
-                    all_non_motor_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                    all_non_motor_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                
-                # Medication features - process all visits at once
-                if med_cols:
-                    all_med_values, all_med_masks = self.create_missingness_masks(
-                        group,
-                        med_cols,
-                        scaler=self.medication_scaler
-                    )
-                else:
-                    all_med_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                    all_med_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                
-                # Age at visit features - process all visits at once
-                if age_at_visit_cols:
-                    all_age_at_visit_values, all_age_at_visit_masks = self.create_missingness_masks(
-                        group,
-                        age_at_visit_cols,
-                        scaler=self.age_at_visit_scaler
-                    )
-                else:
-                    all_age_at_visit_values = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                    all_age_at_visit_masks = np.array([]).reshape(n_visits, 0).astype(np.float32)
-                
-                # Extract time information for all visits (vectorized)
-                if 'months_since_baseline' in group.columns:
-                    time_months_arr = group['months_since_baseline'].fillna(0.0).astype(float).values
-                else:
-                    time_months_arr = np.zeros(n_visits, dtype=float)
-                
-                # Extract UPDRS totals for all visits at once (vectorized)
-                updrs_totals = self.config.features.all_updrs_totals
-                updrs_totals_arr = np.full((n_visits, len(updrs_totals)), np.nan, dtype=float)
-                for j, total in enumerate(updrs_totals):
-                    if total in group.columns:
-                        updrs_totals_arr[:, j] = pd.to_numeric(group[total], errors='coerce').values
-                
-                # Now split into individual visit dictionaries
-                for visit_idx in range(n_visits):
-                    visit_dict = {
-                        'motor_values': all_motor_values[visit_idx],
-                        'motor_mask': all_motor_masks[visit_idx],
-                        'updrs_supplementary_values': all_updrs_supplementary_values[visit_idx],
-                        'updrs_supplementary_mask': all_updrs_supplementary_masks[visit_idx],
-                        'nonmotor_values': all_non_motor_values[visit_idx],  # Changed from 'non_motor_values' to match dataset
-                        'nonmotor_mask': all_non_motor_masks[visit_idx],  # Changed from 'non_motor_mask' to match dataset
-                        'med_values': all_med_values[visit_idx],
-                        'med_mask': all_med_masks[visit_idx],
-                        'age_at_visit_values': all_age_at_visit_values[visit_idx],
-                        'age_at_visit_mask': all_age_at_visit_masks[visit_idx],
-                        'time_months': float(time_months_arr[visit_idx]),
-                        'updrs_totals': updrs_totals_arr[visit_idx].copy(),
-                        'np3tot': float(updrs_totals_arr[visit_idx, 2]) if len(updrs_totals) > 2 and not np.isnan(updrs_totals_arr[visit_idx, 2]) else np.nan
-                    }
-                    visits.append(visit_dict)
-                
-                longitudinal_data[patno] = visits
-        else:
-            # Empty longitudinal data - create empty structure
-            print("WARNING: No longitudinal data available")
-        
-        # Slopes - extract all UPDRS total slopes for each patient
-        # Optimized: Use vectorized operations instead of row-by-row iteration
-        slopes = {}
         all_patnos = list(static_data.keys())
-        all_updrs_totals = self.config.features.all_updrs_totals
-        
-        # Initialize all patients with NaN for all slopes
-        for patno in all_patnos:
-            slopes[patno] = {
-                f'{total}_slope': float('nan')
-                for total in all_updrs_totals
-            }
-        
-        # Fill in computed slopes from slopes_df (optimized: filter first, then iterate)
-        if not slopes_df.empty:
-            # Filter to only patients we care about (reduces iteration)
-            slopes_df_filtered = slopes_df[slopes_df['PATNO'].isin(all_patnos)]
-            
-            # Process slopes - iterate once through filtered dataframe
-            for _, row in slopes_df_filtered.iterrows():
-                patno = row['PATNO']
-                if patno not in slopes:
-                    continue
-                
-                # Extract slope for each UPDRS total
-                for total in all_updrs_totals:
-                    slope_col = f'{total}_slope'
-                    if slope_col in row and pd.notna(row[slope_col]):
-                        slopes[patno][slope_col] = float(row[slope_col])
+        slopes = self.label_engineer.initialize_slope_dict(all_patnos)
+        self.label_engineer.fill_slope_dict_from_df(slopes, slopes_df)
         
         return {
             'static_data': static_data,
@@ -793,33 +597,11 @@ class DataIntegrator:
         print("DATA INTEGRATION PIPELINE")
         print("=" * 80)
         
-        # # Load all data
         data = self.load_all_data()
-        
-        # Filter to only patients with both static and longitudinal data
-        patients_with_both = set(data['static']['PATNO']) & set(data['longitudinal']['PATNO'])
-        print(f"\n--- Filtering to Complete Cases ---")
-        print(f"  Patients with static data: {len(data['static'])}")
-        print(f"  Patients with longitudinal data: {data['longitudinal']['PATNO'].nunique()}")
-        print(f"  Patients with both: {len(patients_with_both)}")
-        
-        data['static'] = data['static'][data['static']['PATNO'].isin(patients_with_both)]
-        data['longitudinal'] = data['longitudinal'][data['longitudinal']['PATNO'].isin(patients_with_both)]
-
-        # Compute slopes
+        data = self._filter_to_complete_cases(data)
         slopes_df = self.compute_progression_slopes(data['longitudinal'])
         data['slopes'] = slopes_df
-        
-        # Create metadata
-        data['metadata'] = {
-            'n_patients': len(data['static']),
-            'n_visits': len(data['longitudinal']),
-            'n_with_slopes': len(slopes_df),
-            'static_features': [c for c in data['static'].columns if c != 'PATNO'],
-            'longitudinal_features': [c for c in data['longitudinal'].columns 
-                                     if c not in ['PATNO', 'EVENT_ID', 'INFODT', 'visit_date']],
-            'updrs_totals': [c for c in data['longitudinal'].columns if c in self.config.features.all_updrs_totals]
-        }
+        data['metadata'] = self._create_metadata(data, slopes_df)
         
         print("\n" + "=" * 80)
         print("DATA INTEGRATION COMPLETE")
@@ -864,80 +646,21 @@ class DataIntegrator:
         print("CREATING FEATURE VECTORS WITH VISIT INDEX")
         print("=" * 80)
         
-        # Load raw data if not provided
         if prepared_data is None:
-            # Load raw DataFrames from loaders
-            print("\n--- Loading Raw Data ---")
-            genetics_df = self.genetics_loader.load()
-            demographics_df = self.demographics_loader.load()
-            updrs_df = self.updrs_loader.load()
-            
-            try:
-                non_motor_df = self.non_motor_loader.load()
-            except Exception as e:
-                print(f"  ⚠️ Non-motor data not available: {e}")
-                non_motor_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
-            
-            try:
-                medication_df = self.medication_loader.load()
-            except Exception as e:
-                print(f"  ⚠️ Medication data not available: {e}")
-                medication_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
-            
-            try:
-                age_at_visit_df = self.age_at_visit_loader.load()
-            except Exception as e:
-                print(f"  ⚠️ Age at visit data not available: {e}")
-                age_at_visit_df = pd.DataFrame(columns=['PATNO', 'EVENT_ID'])
-            
-            # Static data
-            static_df = demographics_df.merge(genetics_df, on='PATNO', how='outer')
+            static_df, updrs_df, non_motor_df, medication_df, age_at_visit_df = self._load_raw_data()
         else:
-            # Use prepared data
             static_df = prepared_data.get('static', pd.DataFrame())
             updrs_df = prepared_data.get('longitudinal', pd.DataFrame())
             non_motor_df = prepared_data.get('non_motor', pd.DataFrame(columns=['PATNO', 'EVENT_ID']))
             medication_df = prepared_data.get('medication', pd.DataFrame(columns=['PATNO', 'EVENT_ID']))
             age_at_visit_df = prepared_data.get('age_at_visit', pd.DataFrame(columns=['PATNO', 'EVENT_ID']))
         
-        # Build visit_index from all longitudinal sources
-        print("\n--- Building Visit Index (Master Timeline) ---")
-        visit_index_builder = VisitIndexBuilder(self.config)
-        
-        visit_index = visit_index_builder.build_from_sources(
-            source_dfs=[updrs_df, non_motor_df, medication_df, age_at_visit_df],
-            valid_patnos=self.valid_participants['PATNO'].tolist()
+        visit_index, valid_patnos = self._build_visit_index(
+            [updrs_df, non_motor_df, medication_df, age_at_visit_df], min_visits
         )
-
-        visit_index = visit_index_builder.filter_by_min_visits(visit_index, min_visits)
-
-        valid_patnos = visit_index['PATNO'].unique()
-
         static_df = static_df[static_df['PATNO'].isin(valid_patnos)]
+        static_data = self._create_static_feature_vectors(static_df, valid_patnos)
         
-        # Create static feature vectors
-        print("\n--- Creating Static Feature Vectors ---")
-        static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
-        static_data = {}
-        
-        for patno in valid_patnos:
-            patient_row = static_df[static_df['PATNO'] == patno]
-            if len(patient_row) == 0:
-                static_data[patno] = {
-                    'values': np.zeros(len(static_cols), dtype=np.float32),
-                    'mask': np.ones(len(static_cols), dtype=np.float32)
-                }
-            else:
-                feature_cols = [c for c in static_cols if c != 'PATNO']
-                values, mask = self.create_missingness_masks(patient_row, feature_cols, scaler=self.static_scaler)
-                static_data[patno] = {
-                    'values': values[0],
-                    'mask': mask[0]
-                }
-        
-        print(f"  ✓ Static features: {len(static_cols)} features for {len(static_data)} patients")
-        
-        # Align modalities to visit_index
         print("\n--- Aligning Modalities to Visit Index ---")
         
         motor_cols = [c for c in self.config.features.motor_features if c in updrs_df.columns]
@@ -949,121 +672,19 @@ class DataIntegrator:
         updrs_total_cols = self.config.features.all_updrs_totals
         age_at_visit_cols = self.config.features.age_at_visit_features
         
-        # Create per-patient longitudinal data
-        longitudinal_data = {}
+        longitudinal_data = self._align_modalities_to_visit_index(
+            visit_index, valid_patnos, updrs_df, non_motor_df, medication_df, 
+            age_at_visit_df, motor_cols, updrs_supplementary_cols, 
+            non_motor_cols, med_cols, age_at_visit_cols
+        )
         
-        for patno in valid_patnos:
-            patient_visits = visit_index[visit_index['PATNO'] == patno].sort_values('visit_order')
-            visits = []
-            
-            for _, visit_row in patient_visits.iterrows():
-                event_id = visit_row['EVENT_ID']
-                visit_dict = {}
-                
-                # Motor features from UPDRS
-                motor_visit = updrs_df[(updrs_df['PATNO'] == patno) & (updrs_df['EVENT_ID'] == event_id)]
-                if len(motor_visit) > 0 and motor_cols:
-                    motor_values, motor_mask = self.create_missingness_masks(motor_visit, motor_cols, scaler=self.motor_scaler)
-                    visit_dict['motor_values'] = motor_values[0]
-                    visit_dict['motor_mask'] = motor_mask[0]
-                else:
-                    visit_dict['motor_values'] = np.zeros(len(motor_cols) if motor_cols else 0, dtype=np.float32)
-                    visit_dict['motor_mask'] = np.ones(len(motor_cols) if motor_cols else 0, dtype=np.float32)
-                
-                # UPDRS supplementary features from UPDRS
-                updrs_supplementary_visit = updrs_df[(updrs_df['PATNO'] == patno) & (updrs_df['EVENT_ID'] == event_id)]
-                if len(updrs_supplementary_visit) > 0 and updrs_supplementary_cols:
-                    updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
-                        updrs_supplementary_visit, updrs_supplementary_cols, scaler=self.updrs_supplementary_scaler
-                    )
-                    visit_dict['updrs_supplementary_values'] = updrs_supplementary_values[0]
-                    visit_dict['updrs_supplementary_mask'] = updrs_supplementary_mask[0]
-                else:
-                    visit_dict['updrs_supplementary_values'] = np.zeros(len(updrs_supplementary_cols) if updrs_supplementary_cols else 0, dtype=np.float32)
-                    visit_dict['updrs_supplementary_mask'] = np.ones(len(updrs_supplementary_cols) if updrs_supplementary_cols else 0, dtype=np.float32)
-                
-                # Non-motor features from non-motor assessments
-                non_motor_visit = non_motor_df[(non_motor_df['PATNO'] == patno) & (non_motor_df['EVENT_ID'] == event_id)] if len(non_motor_df) > 0 else pd.DataFrame()
-                if len(non_motor_visit) > 0 and non_motor_cols:
-                    non_motor_values, non_motor_mask = self.create_missingness_masks(non_motor_visit, non_motor_cols, scaler=self.non_motor_scaler)
-                    visit_dict['nonmotor_values'] = non_motor_values[0]  # Changed from 'non_motor_values' to match dataset
-                    visit_dict['nonmotor_mask'] = non_motor_mask[0]  # Changed from 'non_motor_mask' to match dataset
-                else:
-                    visit_dict['nonmotor_values'] = np.zeros(len(non_motor_cols) if non_motor_cols else 0, dtype=np.float32)  # Changed from 'non_motor_values' to match dataset
-                    visit_dict['nonmotor_mask'] = np.ones(len(non_motor_cols) if non_motor_cols else 0, dtype=np.float32)  # Changed from 'non_motor_mask' to match dataset
-                
-                # Medication features
-                med_visit = medication_df[(medication_df['PATNO'] == patno) & (medication_df['EVENT_ID'] == event_id)] if len(medication_df) > 0 else pd.DataFrame()
-                if len(med_visit) > 0 and med_cols:
-                    med_values, med_mask = self.create_missingness_masks(med_visit, med_cols, scaler=self.medication_scaler)
-                    visit_dict['med_values'] = med_values[0]
-                    visit_dict['med_mask'] = med_mask[0]
-                else:
-                    visit_dict['med_values'] = np.zeros(len(med_cols) if med_cols else 0, dtype=np.float32)
-                    visit_dict['med_mask'] = np.ones(len(med_cols) if med_cols else 0, dtype=np.float32)
-
-                # Age At Visit features
-                age_at_visit = age_at_visit_df[(age_at_visit_df['PATNO'] == patno) & (age_at_visit_df['EVENT_ID'] == event_id)] if len(age_at_visit_df) > 0 else pd.DataFrame()
-                if len(age_at_visit) > 0 and age_at_visit_cols:
-                    age_at_visit_values, age_at_visit_mask = self.create_missingness_masks(age_at_visit, age_at_visit_cols, scaler=self.age_at_visit_scaler)
-                    visit_dict['age_at_visit_values'] = age_at_visit_values[0]
-                    visit_dict['age_at_visit_mask'] = age_at_visit_mask[0]
-                else:
-                    visit_dict["age_at_visit_values"] = np.zeros(len(age_at_visit_cols) if age_at_visit_cols else 0, dtype=np.float32)
-                    visit_dict["age_at_visit_mask"] = np.zeros(len(age_at_visit_cols) if age_at_visit_cols else 0, dtype=np.float32)
-
-                # Time features from visit_index
-                visit_dict['time_months'] = float(visit_row['months_since_baseline']) if pd.notna(visit_row['months_since_baseline']) else 0.0
-                visit_dict['delta_months'] = float(visit_row['delta_months']) if pd.notna(visit_row['delta_months']) else 0.0
-                visit_dict['visit_order'] = int(visit_row['visit_order'])
-                
-                # UPDRS totals (targets)
-                updrs_visit = updrs_df[(updrs_df['PATNO'] == patno) & (updrs_df['EVENT_ID'] == event_id)]
-                updrs_values = []
-                for total in updrs_total_cols:
-                    if len(updrs_visit) > 0 and total in updrs_visit.columns:
-                        val = updrs_visit[total].iloc[0]
-                        val = float(val) if pd.notna(val) else np.nan
-                    else:
-                        val = np.nan
-                    updrs_values.append(val)
-                visit_dict['updrs_totals'] = np.array(updrs_values, dtype=np.float32)
-                visit_dict['np3tot'] = updrs_values[2] if len(updrs_values) > 2 else np.nan  # Backward compatibility
-                
-                visits.append(visit_dict)
-            
-            longitudinal_data[patno] = visits
-        
-        print(f"  ✓ Longitudinal data: {sum(len(v) for v in longitudinal_data.values())} visits")
-        print(f"    Motor features: {len(motor_cols)}")
-        print(f"    UPDRS supplementary features: {len(updrs_supplementary_cols)}")
-        print(f"    Non-motor features: {len(non_motor_cols)}")
-        print(f"    Medication features: {len(med_cols)}")
-        
-        # Compute slopes
-        print("\n--- Computing Progression Slopes ---")
-        if not updrs_df.empty:
-            slopes_df = self.compute_progression_slopes(updrs_df)
-        else:
-            slopes_df = pd.DataFrame()
-        
-        # Create slopes dict
-        slopes = {}
-        for patno in valid_patnos:
-            slopes[patno] = {
-                f'{total}_slope': float('nan')
-                for total in self.config.features.all_updrs_totals
-            }
-        
-        if not slopes_df.empty:
-            for _, row in slopes_df.iterrows():
-                patno = row['PATNO']
-                if patno not in slopes:
-                    continue
-                for total in self.config.features.all_updrs_totals:
-                    slope_col = f'{total}_slope'
-                    if slope_col in row and pd.notna(row[slope_col]):
-                        slopes[patno][slope_col] = float(row[slope_col])
+        slopes_df = (
+            self.compute_progression_slopes(updrs_df) 
+            if not updrs_df.empty 
+            else pd.DataFrame()
+        )
+        slopes = self._initialize_slopes_dict(valid_patnos.tolist())
+        self._fill_slopes_from_df(slopes, slopes_df)
         
         print("\n" + "=" * 80)
         print("FEATURE VECTORS CREATED SUCCESSFULLY")

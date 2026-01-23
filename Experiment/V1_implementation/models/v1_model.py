@@ -337,14 +337,15 @@ class V1MultimodalTransformer(nn.Module):
         valid_slope_mask = ~torch.isnan(slope_targets)
         
         if valid_slope_mask.any():
-            mse_slope = (slope_preds - slope_targets) ** 2
+            # Mask out NaN targets before computing MSE to prevent NaN propagation
+            # Replace NaN targets with 0 (they'll be masked out anyway)
+            slope_targets_masked = torch.where(
+                valid_slope_mask,
+                slope_targets,
+                torch.zeros_like(slope_targets)
+            )
+            mse_slope = (slope_preds - slope_targets_masked) ** 2
             n_valid_slopes = valid_slope_mask.sum().clamp(min=1.0)
             return (mse_slope * valid_slope_mask).sum() / n_valid_slopes
         else:
             return torch.tensor(0.0, device=slope_preds.device)
-        
-        return {
-            'loss': total_loss,
-            'loss_next_visit': loss_next_visit,
-            'loss_slope': loss_slope
-        }

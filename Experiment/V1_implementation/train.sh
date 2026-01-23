@@ -9,6 +9,7 @@ nohup python -u -m training.main \
   --device cuda \
   --max-epochs 120 \
   --patience 10 \
+  --n-splits 10 \
   > train_all.log 2>&1 &
 
 # Terminal 2: Train static+motor
@@ -20,6 +21,7 @@ nohup python -u -m training.main \
   --device cuda \
   --max-epochs 120 \
   --patience 10 \
+  --n-splits 10 \
   > train_static+motor.log 2>&1 &
 
 # Terminal 3: Train motor_only
@@ -31,6 +33,7 @@ nohup python -u -m training.main \
   --device cuda \
   --max-epochs 120 \
   --patience 10 \
+  --n-splits 10 \
   > train_motor_only.log 2>&1 &
 
 # Terminal 4: Train static_only
@@ -42,6 +45,7 @@ nohup python -u -m training.main \
   --device cuda \
   --max-epochs 120 \
   --patience 10 \
+  --n-splits 10 \
   > train_static_only.log 2>&1 &
 
 # Terminal 5: Train static+nonmotor
@@ -53,4 +57,5 @@ nohup python -u -m training.main \
   --device cuda \
   --max-epochs 120 \
   --patience 10 \
+  --n-splits 10 \
   > train_static+nonmotor.log 2>&1 &

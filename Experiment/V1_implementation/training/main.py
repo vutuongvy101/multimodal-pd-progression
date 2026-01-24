@@ -11,20 +11,19 @@ from typing import Dict
 import numpy as np
 import torch
 
-# Ensure V1_implementation is on sys.path for relative imports
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from data.data_integrator import DataIntegrator  # noqa: E402
-from data.dataset import create_dataloaders  # noqa: E402
-from models.v1_model import V1MultimodalTransformer  # noqa: E402
-from training.config import get_default_config as get_default_config_v1  # noqa: E402
-from training.config_v2 import get_default_config as get_default_config_v2  # noqa: E402
-from training.metrics import compute_comprehensive_metrics  # noqa: E402
-from training.train import V1Trainer  # noqa: E402
-from training.kfold_trainer import KFoldTrainer  # noqa: E402
-from training.multi_modal_trainer import MultiModalTrainer  # noqa: E402
+from data.data_integrator import DataIntegrator
+from data.dataset import create_dataloaders
+from models.v1_model import V1MultimodalTransformer
+from training.config import get_default_config as get_default_config_v1
+from training.config_v2 import get_default_config as get_default_config_v2
+from training.metrics import compute_comprehensive_metrics
+from training.train import V1Trainer
+from training.kfold_trainer import KFoldTrainer
+from training.multi_modal_trainer import MultiModalTrainer
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,11 +149,11 @@ def apply_overrides(config, args: argparse.Namespace):
 
 @torch.no_grad()
 def evaluate_with_metrics(
-    model: V1MultimodalTransformer,
-    loader,
-    lambda_slope: float,
-    device: str,
-    target_names,
+        model: V1MultimodalTransformer,
+        loader,
+        lambda_slope: float,
+        device: str,
+        target_names,
 ) -> Dict[str, Dict]:
     """
     Evaluate model on a loader and compute both losses and rich metrics.
@@ -194,7 +193,6 @@ def evaluate_with_metrics(
         for key in epoch_losses:
             epoch_losses[key] += losses[key].item()
 
-        # Accumulate for metrics
         all_predictions["next_visit"].append(predictions["next_visit"].detach().cpu())
         all_predictions["slope"].append(predictions["slope"].detach().cpu())
         all_targets["next_visit"].append(targets["next_visit"].detach().cpu())
@@ -207,7 +205,6 @@ def evaluate_with_metrics(
     for key in epoch_losses:
         epoch_losses[key] /= max(n_batches, 1)
 
-    # Concatenate accumulated tensors
     predictions_cat = {
         "next_visit": torch.cat(all_predictions["next_visit"], dim=0),
         "slope": torch.cat(all_predictions["slope"], dim=0),
@@ -320,7 +317,7 @@ def train_single_split(config, prepared, args):
             f"R2={m['r2']:.4f}, Pearson={m['correlation']:.4f}, "
             f"Spearman={m.get('spearman', float('nan')):.4f}, n={m['n_samples']}"
         )
-        # Print per-Δt bucket metrics if available
+
         if m.get('delta_t_buckets'):
             print(f"    Per-Δt buckets:")
             for bucket_name, bucket_metrics in m['delta_t_buckets'].items():
@@ -329,15 +326,13 @@ def train_single_split(config, prepared, args):
                         f"      {bucket_name}: MAE={bucket_metrics['mae']:.4f}, "
                         f"RMSE={bucket_metrics['rmse']:.4f}, n={bucket_metrics['n_samples']}"
                     )
-    
-    # Print overall next-visit metrics
+
     if "next_visit_overall" in metrics:
         overall = metrics["next_visit_overall"]
         print(f"\nNext-visit overall: Macro MAE={overall.get('macro_avg_mae', float('nan')):.4f}, "
               f"Weighted MAE={overall.get('weighted_avg_mae', float('nan')):.4f}, "
               f"Total samples={overall.get('total_samples', 0)}")
-    
-    # Print per-target slope metrics
+
     print("\nPer-target slope metrics:")
     for name, m in metrics.get("slope", {}).items():
         if m.get('n_samples', 0) > 0:
@@ -345,8 +340,7 @@ def train_single_split(config, prepared, args):
                 f"  {name}: MAE={m['mae']:.4f}, RMSE={m['rmse']:.4f}, "
                 f"Spearman={m.get('spearman', float('nan')):.4f}, n={m['n_samples']}"
             )
-    
-    # Print overall slope metrics
+
     if "slope_overall" in metrics:
         slope_overall = metrics["slope_overall"]
         print(
@@ -390,8 +384,7 @@ def train_kfold_cv(config, prepared, args):
 def train_multi_modal(config, prepared, args):
     """Train multiple models with different modality combinations"""
     device = args.device or config.training.device
-    
-    # Default modality sets if none specified
+
     if args.modalities is None:
         default_modalities = [
             'all',
@@ -405,7 +398,7 @@ def train_multi_modal(config, prepared, args):
         modality_specs = default_modalities
     else:
         modality_specs = args.modalities
-    
+
     print("\nInitializing multi-modal trainer...")
     multi_modal_trainer = MultiModalTrainer(
         config=config,
@@ -417,14 +410,13 @@ def train_multi_modal(config, prepared, args):
         device=device,
         num_workers=args.num_workers,
     )
-    
+
     print("\nStarting multi-modal training...")
     results = multi_modal_trainer.train_multiple(
         modality_specs=modality_specs,
         force_retrain=args.force_retrain
     )
-    
-    # Print comparison
+
     comparison = multi_modal_trainer.compare_results()
     print("\n" + "=" * 80)
     print("MODALITY COMPARISON")
@@ -437,15 +429,26 @@ def train_multi_modal(config, prepared, args):
             print(f"  {cfg['modality_key']}: {cfg['mean_val_loss']:.4f} ± {cfg['std_val_loss']:.4f}")
     print("=" * 80)
 
+    if args.evaluate_test:
+        print("\nEvaluating on test set...")
+        test_results = multi_modal_trainer.evaluate_test_all()
+        if test_results:
+            print("\nTest evaluation summary:")
+            for modality_key, result in test_results.items():
+                if 'error' in result:
+                    print(f"  {modality_key}: Error - {result['error']}")
+                else:
+                    losses = result.get('losses', {})
+                    print(f"  {modality_key}: Test Loss = {losses.get('loss', 'N/A'):.4f}")
+
 
 def main():
     args = parse_args()
-    
-    # Validate arguments
+
     if args.mode == "multi_modal" and args.modalities is None:
         print("Note: --mode multi_modal specified but no --modalities given.")
         print("Will use default modality sets. Use --modalities to specify custom sets.")
-    
+
     set_seed(args.seed)
 
     print("=" * 80)

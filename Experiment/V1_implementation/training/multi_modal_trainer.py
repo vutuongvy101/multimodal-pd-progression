@@ -74,6 +74,8 @@ class MultiModalTrainer:
         
         # Results storage
         self.training_results: Dict[str, Dict] = {}
+        # Store kfold_trainer instances for test evaluation
+        self.kfold_trainers: Dict[str, KFoldTrainer] = {}
     
     @staticmethod
     def get_modality_key(modalities: List[str]) -> str:
@@ -236,6 +238,9 @@ class MultiModalTrainer:
         
         try:
             results = kfold_trainer.train(save_fold_checkpoints=True)
+            
+            # Store kfold_trainer for potential test evaluation
+            self.kfold_trainers[modality_key] = kfold_trainer
             
             save_dir = self.get_save_dir(modalities)
             
@@ -476,3 +481,35 @@ class MultiModalTrainer:
         comparison['configurations'].sort(key=lambda x: x['mean_val_loss'])
         
         return comparison
+    
+    def evaluate_test_all(self) -> Dict[str, Dict]:
+        """
+        Evaluate test set for all trained modality configurations.
+        
+        Returns:
+            Dictionary mapping modality_key -> test evaluation results
+        """
+        test_results = {}
+        
+        print("\n" + "=" * 80)
+        print("EVALUATING TEST SET FOR ALL MODALITY CONFIGURATIONS")
+        print("=" * 80)
+        
+        for modality_key, kfold_trainer in self.kfold_trainers.items():
+            if kfold_trainer.test_loader is None:
+                print(f"\n⚠ Skipping {modality_key}: test_loader not available")
+                continue
+            
+            print(f"\nEvaluating test set for: {modality_key}")
+            try:
+                test_result = kfold_trainer.evaluate_test()
+                test_results[modality_key] = test_result
+            except Exception as e:
+                print(f"✗ Test evaluation failed for {modality_key}: {e}")
+                test_results[modality_key] = {'error': str(e)}
+        
+        print("\n" + "=" * 80)
+        print("TEST EVALUATION COMPLETE")
+        print("=" * 80)
+        
+        return test_results

@@ -1,62 +1,106 @@
 {
-  "n_splits": 5,
+  "n_splits": 10,
   "test_ratio": 0.2,
   "random_seed": 42,
   "fold_results": [
     {
       "fold": 1,
-      "best_val_loss": 34.99705279957164,
-      "val_loss": 34.99705279957164,
-      "val_loss_next_visit": 34.97885600003329,
-      "val_loss_slope": 0.09098279950293628,
-      "best_epoch": 69,
-      "n_epochs_trained": 70
+      "val_loss": 17.607474009195965,
+      "val_loss_next_visit": 17.601370175679524,
+      "val_loss_slope": 0.03051989246159792,
+      "best_val_loss": 17.607474009195965,
+      "best_epoch": 199
     },
     {
       "fold": 2,
-      "best_val_loss": 32.54289505698464,
-      "val_loss": 32.54289505698464,
-      "val_loss_next_visit": 32.53106013211337,
-      "val_loss_slope": 0.05917654423551126,
-      "best_epoch": 69,
-      "n_epochs_trained": 70
+      "val_loss": 14.7894237836202,
+      "val_loss_next_visit": 14.779712359110514,
+      "val_loss_slope": 0.04855719798554977,
+      "best_val_loss": 14.7894237836202,
+      "best_epoch": 199
     },
     {
       "fold": 3,
-      "best_val_loss": 35.477792739868164,
-      "val_loss": 35.477792739868164,
-      "val_loss_next_visit": 35.46347028558905,
-      "val_loss_slope": 0.07161250185560096,
-      "best_epoch": 69,
-      "n_epochs_trained": 70
+      "val_loss": 15.890965302785238,
+      "val_loss_next_visit": 15.88556178410848,
+      "val_loss_slope": 0.02701783226802945,
+      "best_val_loss": 15.890965302785238,
+      "best_epoch": 199
     },
     {
       "fold": 4,
-      "best_val_loss": 26.12593581459739,
-      "val_loss": 26.12593581459739,
-      "val_loss_next_visit": 26.10261396928267,
-      "val_loss_slope": 0.11660913039337505,
-      "best_epoch": 69,
-      "n_epochs_trained": 70
+      "val_loss": 14.052685578664144,
+      "val_loss_next_visit": 14.047262032826742,
+      "val_loss_slope": 0.02711781021207571,
+      "best_val_loss": 14.052685578664144,
+      "best_epoch": 199
     },
     {
       "fold": 5,
-      "best_val_loss": 28.37805531241677,
-      "val_loss": 28.37805531241677,
-      "val_loss_next_visit": 28.363904172723945,
-      "val_loss_slope": 0.07075852782211521,
-      "best_epoch": 69,
-      "n_epochs_trained": 70
+      "val_loss": 15.397195418675741,
+      "val_loss_next_visit": 15.38974404335022,
+      "val_loss_slope": 0.03725666180253029,
+      "best_val_loss": 15.397195418675741,
+      "best_epoch": 199
+    },
+    {
+      "fold": 6,
+      "val_loss": 15.377138455708822,
+      "val_loss_next_visit": 15.371515909830729,
+      "val_loss_slope": 0.028112547161678474,
+      "best_val_loss": 15.377138455708822,
+      "best_epoch": 199
+    },
+    {
+      "fold": 7,
+      "val_loss": 11.327308098475138,
+      "val_loss_next_visit": 11.313730716705322,
+      "val_loss_slope": 0.06788749682406585,
+      "best_val_loss": 11.322741031646729,
+      "best_epoch": 190
+    },
+    {
+      "fold": 8,
+      "val_loss": 12.383505741755167,
+      "val_loss_next_visit": 12.379789670308432,
+      "val_loss_slope": 0.018579901816944282,
+      "best_val_loss": 12.383505741755167,
+      "best_epoch": 199
+    },
+    {
+      "fold": 9,
+      "val_loss": 13.766942660013834,
+      "val_loss_next_visit": 13.760916074117025,
+      "val_loss_slope": 0.030133307445794344,
+      "best_val_loss": 13.766942660013834,
+      "best_epoch": 199
+    },
+    {
+      "fold": 10,
+      "val_loss": 12.568846146265665,
+      "val_loss_next_visit": 12.562891324361166,
+      "val_loss_slope": 0.02977413684129715,
+      "best_val_loss": 12.568846146265665,
+      "best_epoch": 199
     }
   ],
   "summary": {
-    "mean_val_loss": 31.504343032836914,
-    "std_val_loss": 4.116030216217041,
-    "mean_val_next_visit": 31.487979888916016,
-    "std_val_next_visit": 4.118275165557861,
-    "mean_val_slope": 0.08182790130376816,
-    "std_val_slope": 0.02254725992679596,
-    "mean_best_val_loss": 31.504343032836914,
-    "std_best_val_loss": 4.116030216217041
-  }
+    "mean_val_loss": 14.316146850585938,
+    "std_val_loss": 1.8833658695220947,
+    "mean_val_next_visit": 14.309249877929688,
+    "std_val_next_visit": 1.884293556213379,
+    "mean_val_slope": 0.03449568152427673,
+    "std_val_slope": 0.01407085545361042,
+    "mean_best_val_loss": 14.315690994262695,
+    "std_best_val_loss": 1.8841716051101685
+  },
+  "modalities": [
+    "static",
+    "motor",
+    "non_motor",
+    "medication",
+    "age_at_visit"
+  ],
+  "modality_key": "age_at_visit+medication+motor+non_motor+static",
+  "status": "completed"
 }

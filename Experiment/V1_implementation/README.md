@@ -971,19 +971,20 @@ python -m training.main \
 models/checkpoints/
 ├── modalities_all/
 │   ├── fold_1/
+│   │   └── training_history.json  # Per-epoch training curves
 │   ├── fold_2/
-│   ├── kfold_results.json
-│   ├── training_summary.json  # Summary for this modality config
-│   └── MODALITY_TRAINING_COMPLETE.json
+│   │   └── training_history.json
+│   ├── kfold_results.json  # CV results with modality metadata
+│   └── test_metrics.json  # Test set evaluation (if evaluated)
 ├── modalities_static+motor/
-│   ├── training_summary.json  # Summary for this modality config
-│   └── ...
+│   ├── kfold_results.json
+│   └── test_metrics.json
 └── ...
 ```
 
 **Checkpoint Detection:**
 - Automatically skips already-trained configurations
-- Checks for `MODALITY_TRAINING_COMPLETE.json` marker
+- Checks for `kfold_results.json` with `status='completed'`
 - Use `--force-retrain` to retrain anyway
 
 ### Training Workflows
@@ -1011,7 +1012,7 @@ python -m training.main \
   --mode multi_modal \
   --modalities all static+motor static+nonmotor motor_only static_only
 
-# Step 2: Review summaries in each modality folder (e.g., models/checkpoints/modalities_motor_only/training_summary.json)
+# Step 2: Review results in each modality folder (e.g., models/checkpoints/modalities_motor_only/kfold_results.json)
 # Step 3: Use aggregate_summaries() method to compare all results, or manually review each folder
 # Step 4: Identify best modality combination
 # Step 4: Train final model with best configuration
@@ -1213,7 +1214,7 @@ with open('models/checkpoints/kfold_results.json', 'r') as f:
     results = json.load(f)
 
 # Access test metrics (if --evaluate-test was used)
-with open('models/checkpoints/test_metrics_best_fold.json', 'r') as f:
+with open('models/checkpoints/test_metrics.json', 'r') as f:
     test_metrics = json.load(f)
     
 # Test metrics structure

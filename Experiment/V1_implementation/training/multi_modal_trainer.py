@@ -122,9 +122,7 @@ class MultiModalTrainer:
         """
         Check if a modality configuration has already been trained.
         
-        Checks for:
-        - Completion marker file (MODALITY_TRAINING_COMPLETE.json)
-        - At least one fold checkpoint
+        Checks for kfold_results.json with status='completed' and fold results.
         
         Args:
             modalities: List of modality names
@@ -133,21 +131,18 @@ class MultiModalTrainer:
             True if training appears complete
         """
         save_dir = self.get_save_dir(modalities)
-        completion_file = save_dir / "MODALITY_TRAINING_COMPLETE.json"
+        results_file = save_dir / "kfold_results.json"
         
-        if not completion_file.exists():
+        if not results_file.exists():
             return False
         
-        # Verify at least one fold was completed
         try:
-            with open(completion_file, 'r') as f:
-                completion_data = json.load(f)
-                if completion_data.get('status') != 'completed':
+            with open(results_file, 'r') as f:
+                results_data = json.load(f)
+                if results_data.get('status') != 'completed':
                     return False
                 
-                # Check that we have fold results
-                results_file = save_dir / "kfold_results.json"
-                if not results_file.exists():
+                if not results_data.get('fold_results'):
                     return False
                 
                 return True
@@ -234,6 +229,8 @@ class MultiModalTrainer:
             random_seed=self.random_seed,
             device=self.device,
             num_workers=self.num_workers,
+            modalities=modalities,
+            modality_key=modality_key
         )
         
         try:
@@ -242,33 +239,7 @@ class MultiModalTrainer:
             # Store kfold_trainer for potential test evaluation
             self.kfold_trainers[modality_key] = kfold_trainer
             
-            save_dir = self.get_save_dir(modalities)
-            
-            # Mark as complete
-            completion_file = save_dir / "MODALITY_TRAINING_COMPLETE.json"
-            completion_data = {
-                'modalities': modalities,
-                'modality_key': modality_key,
-                'status': 'completed',
-                'n_splits': self.n_splits,
-                'test_ratio': self.test_ratio,
-                'summary': results['summary']
-            }
-            with open(completion_file, 'w') as f:
-                json.dump(completion_data, f, indent=2)
-            
-            # Save summary in modality's dedicated folder
-            summary_file = save_dir / "training_summary.json"
-            summary_data = {
-                'modalities': modalities,
-                'modality_key': modality_key,
-                'status': 'completed',
-                'n_splits': self.n_splits,
-                'test_ratio': self.test_ratio,
-                'results': results
-            }
-            with open(summary_file, 'w') as f:
-                json.dump(summary_data, f, indent=2, default=str)
+            # kfold_results.json is already saved by KFoldTrainer with modality metadata
             
             return {
                 'modalities': modalities,
@@ -281,28 +252,18 @@ class MultiModalTrainer:
             
             save_dir = self.get_save_dir(modalities)
             
-            # Mark as failed
-            completion_file = save_dir / "MODALITY_TRAINING_COMPLETE.json"
-            completion_data = {
-                'modalities': modalities,
-                'modality_key': modality_key,
-                'status': 'failed',
-                'error': str(e)
-            }
-            with open(completion_file, 'w') as f:
-                json.dump(completion_data, f, indent=2)
-            
-            # Save summary in modality's dedicated folder
-            summary_file = save_dir / "training_summary.json"
-            summary_data = {
+            # Mark as failed in kfold_results.json
+            results_file = save_dir / "kfold_results.json"
+            failure_data = {
                 'modalities': modalities,
                 'modality_key': modality_key,
                 'status': 'failed',
                 'error': str(e),
-                'results': None
+                'n_splits': self.n_splits,
+                'test_ratio': self.test_ratio
             }
-            with open(summary_file, 'w') as f:
-                json.dump(summary_data, f, indent=2, default=str)
+            with open(results_file, 'w') as f:
+                json.dump(failure_data, f, indent=2)
             
             return {
                 'modalities': modalities,
@@ -391,10 +352,10 @@ class MultiModalTrainer:
                     print(f"      Val Loss: {mean_val:.4f} ± {std_val:.4f}")
         
         print("\n" + "=" * 80)
-        print("Summary files saved in each modality's folder:")
+        print("Results files saved in each modality's folder:")
         for key, result in summary['results'].items():
-            save_dir = self.get_save_dir(result['modalities'])
-            print(f"  {key}: {save_dir / 'training_summary.json'}")
+            save_dir = self.get_save_dir(result.get('modalities', []))
+            print(f"  {key}: {save_dir / 'kfold_results.json'}")
         print("=" * 80)
     
     def aggregate_summaries(self) -> Dict:
@@ -418,18 +379,18 @@ class MultiModalTrainer:
             if not modality_dir.is_dir():
                 continue
             
-            summary_file = modality_dir / "training_summary.json"
-            if not summary_file.exists():
+            results_file = modality_dir / "kfold_results.json"
+            if not results_file.exists():
                 continue
             
             try:
-                with open(summary_file, 'r') as f:
-                    summary_data = json.load(f)
+                with open(results_file, 'r') as f:
+                    results_data = json.load(f)
                     
-                modality_key = summary_data.get('modality_key', modality_dir.name)
-                status = summary_data.get('status', 'unknown')
+                modality_key = results_data.get('modality_key', modality_dir.name)
+                status = results_data.get('status', 'unknown')
                 
-                aggregated['results'][modality_key] = summary_data
+                aggregated['results'][modality_key] = results_data
                 
                 if status == 'completed':
                     aggregated['completed'] += 1
@@ -441,7 +402,7 @@ class MultiModalTrainer:
                 aggregated['total_configs'] += 1
                 
             except (json.JSONDecodeError, KeyError) as e:
-                print(f"Warning: Could not read summary from {summary_file}: {e}")
+                print(f"Warning: Could not read results from {results_file}: {e}")
                 continue
         
         return aggregated

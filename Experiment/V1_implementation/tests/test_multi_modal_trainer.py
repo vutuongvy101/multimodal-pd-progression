@@ -17,11 +17,15 @@ class DummyKFoldTrainer:
         random_seed=42,
         device="cpu",
         num_workers=0,
+        modalities=None,
+        modality_key=None,
     ):
         self.config = config
         self.save_dir = Path(config.data.model_save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.n_splits = n_splits
+        self.modalities = modalities
+        self.modality_key = modality_key
 
     def train(self, save_fold_checkpoints: bool = True):
         # Create fold dirs and minimal checkpoint markers
@@ -45,12 +49,19 @@ class DummyKFoldTrainer:
 
         # Write kfold_results.json where MultiModalTrainer expects it
         results_path = self.save_dir / "kfold_results.json"
+        results_data = {
+            "n_splits": self.n_splits,
+            "fold_results": fold_results,
+            "summary": summary,
+            "status": "completed"
+        }
+        if self.modalities is not None:
+            results_data["modalities"] = self.modalities
+        if self.modality_key is not None:
+            results_data["modality_key"] = self.modality_key
+        
         with open(results_path, "w") as f:
-            json.dump(
-                {"n_splits": self.n_splits, "fold_results": fold_results, "summary": summary},
-                f,
-                indent=2,
-            )
+            json.dump(results_data, f, indent=2)
 
         return {"fold_results": fold_results, "summary": summary, "test_loader": None}
 
@@ -88,13 +99,13 @@ def test_multi_modal_trainer_creates_isolated_dirs_and_skips(tmp_path, test_conf
     assert "static" in results  # key is sorted modality string, e.g. "static"
     assert "motor" in results
 
-    # Each config has isolated directory + completion marker
+    # Each config has isolated directory + results file
     static_dir = Path(test_config.data.model_save_dir) / "modalities_static"
     motor_dir = Path(test_config.data.model_save_dir) / "modalities_motor"
     assert static_dir.exists()
     assert motor_dir.exists()
-    assert (static_dir / "MODALITY_TRAINING_COMPLETE.json").exists()
-    assert (motor_dir / "MODALITY_TRAINING_COMPLETE.json").exists()
+    assert (static_dir / "kfold_results.json").exists()
+    assert (motor_dir / "kfold_results.json").exists()
 
     # Re-running should skip
     result2 = trainer.train_modality_config(["static"], force_retrain=False)

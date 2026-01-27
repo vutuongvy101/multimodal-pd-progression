@@ -176,7 +176,8 @@ class V1Trainer:
             'val_loss': [],
             'val_loss_next_visit': [],
             'val_loss_slope': [],
-            'learning_rate': []
+            'learning_rate': [],
+            'val_metrics': []
         }
         self.best_val_metrics = None
         self.current_val_metrics = None
@@ -485,7 +486,26 @@ class V1Trainer:
         self.training_history['val_loss_next_visit'].append(val_losses['loss_next_visit'])
         self.training_history['val_loss_slope'].append(val_losses['loss_slope'])
         self.training_history['learning_rate'].append(self.optimizer.param_groups[0]['lr'])
-            
+        if self.current_val_metrics is not None:
+            metrics_serializable = self._serialize_metrics(self.current_val_metrics)
+            self.training_history['val_metrics'].append(metrics_serializable)
+
+    def _serialize_metrics(self, metrics: Dict) -> Dict:
+        """Convert metrics dictionary to JSON-serializable format."""
+        def convert_value(v):
+            if isinstance(v, (torch.Tensor, np.ndarray)):
+                return float(v.item()) if v.numel() == 1 else v.tolist()
+            elif isinstance(v, (int, float, str, bool, type(None))):
+                return v
+            elif isinstance(v, dict):
+                return {k: convert_value(v2) for k, v2 in v.items()}
+            elif isinstance(v, list):
+                return [convert_value(item) for item in v]
+            else:
+                return str(v)
+
+        return convert_value(metrics)
+
     def _check_and_update_best(self, val_losses: Dict[str, float], epoch: int) -> bool:
         """Check if current epoch is best and update state."""
         is_best = val_losses['loss'] < self.best_val_loss

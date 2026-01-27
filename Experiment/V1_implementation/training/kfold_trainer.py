@@ -31,7 +31,9 @@ class KFoldTrainer:
         test_ratio: float = 0.2,
         random_seed: int = 42,
         device: str = 'cuda',
-        num_workers: int = 0
+        num_workers: int = 0,
+        modalities: Optional[List[str]] = None,
+        modality_key: Optional[str] = None
     ):
         """
         Args:
@@ -42,6 +44,8 @@ class KFoldTrainer:
             random_seed: Random seed for reproducibility
             device: Device to use for training
             num_workers: Number of DataLoader workers
+            modalities: Optional list of modality names (for multi-modal training)
+            modality_key: Optional modality key string (for multi-modal training)
         """
         self.config = config
         self.prepared_data = prepared_data
@@ -50,6 +54,8 @@ class KFoldTrainer:
         self.random_seed = random_seed
         self.device = device
         self.num_workers = num_workers
+        self.modalities = modalities
+        self.modality_key = modality_key
         
         self.fold_results: List[Dict] = []
         self.test_loader: Optional[DataLoader] = None
@@ -288,7 +294,7 @@ class KFoldTrainer:
         print("=" * 80)
     
     def _save_results(self, summary: Dict):
-        """Save CV results to JSON."""
+        """Save CV results to JSON with optional modality metadata."""
         results = {
             'n_splits': self.n_splits,
             'test_ratio': self.test_ratio,
@@ -296,6 +302,13 @@ class KFoldTrainer:
             'fold_results': self.fold_results,
             'summary': summary
         }
+        
+        if self.modalities is not None:
+            results['modalities'] = self.modalities
+        if self.modality_key is not None:
+            results['modality_key'] = self.modality_key
+        if self.modalities is not None or self.modality_key is not None:
+            results['status'] = 'completed'
         
         results_path = self.save_dir / 'kfold_results.json'
         with open(results_path, 'w') as f:
@@ -524,7 +537,7 @@ class KFoldTrainer:
     
     def _save_test_metrics(self, test_losses: Dict[str, float], metrics: Dict, model_path: Path):
         """Save test metrics to JSON file."""
-        results_path = self.save_dir / 'test_metrics_best_fold.json'
+        results_path = self.save_dir / 'test_metrics.json'
         to_save = {
             'losses': test_losses,
             'metrics': metrics,
@@ -533,5 +546,22 @@ class KFoldTrainer:
         with open(results_path, 'w') as f:
             json.dump(to_save, f, indent=2)
         print(f"\n✓ Saved test metrics to {results_path}")
+
+        best_fold_idx = min(
+            range(len(self.fold_results)),
+            key=lambda i: self.fold_results[i]['best_val_loss']
+        )
+        fold_num = best_fold_idx + 1
+        fold_checkpoint_path = self.save_dir / f"fold_{fold_num}" / "best_checkpoint.pt"
+
+        if fold_checkpoint_path.exists():
+            checkpoint = torch.load(fold_checkpoint_path, map_location='cpu', weights_only=False)
+            training_history = checkpoint.get('training_history', {})
+
+            # Save per-epoch history
+            history_path = self.save_dir / 'training_history_best_fold.json'
+            with open(history_path, 'w') as f:
+                json.dump(training_history, f, indent=2, default=str)
+            print(f"✓ Saved per-epoch training history to {history_path}")
 
         return {'losses': test_losses, 'metrics': metrics}

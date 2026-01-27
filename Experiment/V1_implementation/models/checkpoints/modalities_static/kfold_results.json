@@ -1,0 +1,38 @@
+{
+  "n_splits": 2,
+  "test_ratio": 0.2,
+  "random_seed": 42,
+  "fold_results": [
+    {
+      "fold": 1,
+      "val_loss": 107.23300184522357,
+      "val_loss_next_visit": 107.22514833722796,
+      "val_loss_slope": 0.039267417575631826,
+      "best_val_loss": 107.23300184522357,
+      "best_epoch": 19
+    },
+    {
+      "fold": 2,
+      "val_loss": 93.45368644169399,
+      "val_loss_next_visit": 93.4448469706944,
+      "val_loss_slope": 0.04419349183860634,
+      "best_val_loss": 93.45368644169399,
+      "best_epoch": 19
+    }
+  ],
+  "summary": {
+    "mean_val_loss": 100.34334564208984,
+    "std_val_loss": 9.74344539642334,
+    "mean_val_next_visit": 100.33499908447266,
+    "std_val_next_visit": 9.744146347045898,
+    "mean_val_slope": 0.04173045605421066,
+    "std_val_slope": 0.00348326051607728,
+    "mean_best_val_loss": 100.34334564208984,
+    "std_best_val_loss": 9.74344539642334
+  },
+  "modalities": [
+    "static"
+  ],
+  "modality_key": "static",
+  "status": "completed"
+}

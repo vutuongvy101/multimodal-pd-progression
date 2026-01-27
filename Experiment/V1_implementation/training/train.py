@@ -34,18 +34,17 @@ class WarmupCosineAnnealingLR:
         self,
         optimizer,
         warmup_epochs: Optional[int] = None,
-        warmup_ratio: float = 0.075,  # 7.5% of total epochs (middle of 5-10%)
+        warmup_ratio: float = 0.1,  
         warmup_steps: Optional[int] = None,
         max_epochs=200,
         target_lr: Optional[float] = None,
-        min_lr: Optional[float] = None,
-        min_lr_ratio: float = 0.1  # min_lr = target_lr * min_lr_ratio
+        min_lr: Optional[float] = None, # min_lr = target_lr * min_lr_ratio
+        min_lr_ratio: float = 0.1 
     ):
         self.optimizer = optimizer
         self.max_epochs = max_epochs
         self.target_lr = target_lr or optimizer.param_groups[0]['lr']
         
-        # Calculate warmup epochs dynamically if not provided
         if warmup_epochs is None:
             self.warmup_epochs = max(1, int(warmup_ratio * max_epochs))  # At least 1 epoch
         else:
@@ -53,7 +52,6 @@ class WarmupCosineAnnealingLR:
         
         self.warmup_steps = warmup_steps
         
-        # Calculate min_lr from ratio if not provided
         if min_lr is None:
             self.min_lr = self.target_lr * min_lr_ratio
         else:
@@ -90,10 +88,7 @@ class WarmupCosineAnnealingLR:
                     self.in_warmup = False
                     self._set_lr(self.target_lr)
         
-        # Cosine annealing phase
         if self.current_epoch >= self.warmup_epochs:
-            # Calculate progress through cosine annealing (0 to 1)
-            # Decay spans from warmup_end to max_epochs
             decay_epochs = self.max_epochs - self.warmup_epochs
             if decay_epochs > 0:
                 progress = (self.current_epoch - self.warmup_epochs) / decay_epochs

@@ -451,7 +451,8 @@ class MultiModalTrainer:
         comparison = {
             'configurations': [],
             'best_config': None,
-            'best_val_loss': float('inf')
+            'best_val_loss': float('inf'),
+            'best_val_r2': float('-inf')
         }
         
         for key, result in self.training_results.items():
@@ -460,17 +461,23 @@ class MultiModalTrainer:
             
             summary = result['results'].get('summary', {})
             mean_val_loss = summary.get('mean_val_loss', float('inf'))
+            mean_val_r2 = summary.get('mean_val_r2', 0.0)
             
             comparison['configurations'].append({
                 'modality_key': key,
                 'modalities': result['modalities'],
                 'mean_val_loss': mean_val_loss,
                 'std_val_loss': summary.get('std_val_loss', 0),
+                'mean_val_r2': mean_val_r2,
+                'std_val_r2': summary.get('std_val_r2', 0),
             })
             
             if mean_val_loss < comparison['best_val_loss']:
                 comparison['best_val_loss'] = mean_val_loss
                 comparison['best_config'] = key
+            
+            if mean_val_r2 > comparison['best_val_r2']:
+                comparison['best_val_r2'] = mean_val_r2
         
         # Sort by validation loss
         comparison['configurations'].sort(key=lambda x: x['mean_val_loss'])

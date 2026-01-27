@@ -1,0 +1,74 @@
+{
+  "n_splits": 5,
+  "test_ratio": 0.2,
+  "random_seed": 42,
+  "fold_results": [
+    {
+      "fold": 1,
+      "best_val_loss": 16.144767847928133,
+      "val_loss": 16.144767847928133,
+      "val_loss_next_visit": 16.126872127706353,
+      "val_loss_slope": 0.08947959017347205,
+      "val_r2": 0.6486914716660976,
+      "val_accuracy": 0.6486914716660976,
+      "best_epoch": 69,
+      "n_epochs_trained": 70
+    },
+    {
+      "fold": 2,
+      "best_val_loss": 14.873457735235041,
+      "val_loss": 14.873457735235041,
+      "val_loss_next_visit": 14.862182703885166,
+      "val_loss_slope": 0.056374636055393654,
+      "val_r2": 0.6756837293505669,
+      "val_accuracy": 0.6756837293505669,
+      "best_epoch": 69,
+      "n_epochs_trained": 70
+    },
+    {
+      "fold": 3,
+      "best_val_loss": 15.147292245518077,
+      "val_loss": 15.147292245518077,
+      "val_loss_next_visit": 15.131007411263205,
+      "val_loss_slope": 0.08142451408573172,
+      "val_r2": 0.6585571579635143,
+      "val_accuracy": 0.6585571579635143,
+      "best_epoch": 69,
+      "n_epochs_trained": 70
+    },
+    {
+      "fold": 4,
+      "best_val_loss": 12.063123963095926,
+      "val_loss": 12.334478573365645,
+      "val_loss_next_visit": 12.312157587571578,
+      "val_loss_slope": 0.1116049201651053,
+      "val_r2": 0.6849768087267876,
+      "val_accuracy": 0.6849768087267876,
+      "best_epoch": 69,
+      "n_epochs_trained": 70
+    },
+    {
+      "fold": 5,
+      "best_val_loss": 13.852783636613326,
+      "val_loss": 13.884488344192505,
+      "val_loss_next_visit": 13.870529283176769,
+      "val_loss_slope": 0.06979511119425297,
+      "val_r2": 0.693305104970932,
+      "val_accuracy": 0.693305104970932,
+      "best_epoch": 69,
+      "n_epochs_trained": 70
+    }
+  ],
+  "summary": {
+    "mean_val_loss": 14.476896286010742,
+    "std_val_loss": 1.443034052848816,
+    "mean_val_next_visit": 14.460550308227539,
+    "std_val_next_visit": 1.4449193477630615,
+    "mean_val_slope": 0.0817357525229454,
+    "std_val_slope": 0.02084464207291603,
+    "mean_best_val_loss": 14.416285514831543,
+    "std_best_val_loss": 1.5480579137802124,
+    "mean_val_r2": 0.6722428798675537,
+    "std_val_r2": 0.018436230719089508
+  }
+}

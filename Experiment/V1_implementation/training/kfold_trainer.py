@@ -126,7 +126,7 @@ class KFoldTrainer:
         trainer.train(max_epochs=max_epochs, early_stopping_patience=patience)
         
         # Evaluate on validation set
-        val_metrics = trainer.validate()
+        val_losses, val_metrics, val_accuracy = trainer.validate()
         
         # Save fold checkpoint if requested
         if save_fold_checkpoint:
@@ -137,18 +137,21 @@ class KFoldTrainer:
         fold_result = {
             'fold': fold_idx + 1,
             'best_val_loss': trainer.best_val_loss,
-            'val_loss': val_metrics['loss'],
-            'val_loss_next_visit': val_metrics['loss_next_visit'],
-            'val_loss_slope': val_metrics['loss_slope'],
+            'val_loss': val_losses['loss'],
+            'val_loss_next_visit': val_losses['loss_next_visit'],
+            'val_loss_slope': val_losses['loss_slope'],
+            'val_r2': val_accuracy,
+            'val_accuracy': val_accuracy,
             'best_epoch': trainer.current_epoch,
             'n_epochs_trained': len(trainer.training_history['train_loss'])
         }
         
         print(f"\nFold {fold_idx + 1} Results:")
         print(f"  Best Val Loss: {trainer.best_val_loss:.4f} (epoch {trainer.current_epoch})")
-        print(f"  Final Val Loss: {val_metrics['loss']:.4f}")
-        print(f"    - Next Visit: {val_metrics['loss_next_visit']:.4f}")
-        print(f"    - Slope: {val_metrics['loss_slope']:.4f}")
+        print(f"  Final Val Loss: {val_losses['loss']:.4f}")
+        print(f"    - Next Visit: {val_losses['loss_next_visit']:.4f}")
+        print(f"    - Slope: {val_losses['loss_slope']:.4f}")
+        print(f"  Val R² (Accuracy): {val_accuracy:.4f}")
         
         return fold_result
     
@@ -213,6 +216,7 @@ class KFoldTrainer:
         val_next_visit = [r['val_loss_next_visit'] for r in self.fold_results]
         val_slope = [r['val_loss_slope'] for r in self.fold_results]
         best_val_losses = [r['best_val_loss'] for r in self.fold_results]
+        val_accuracies = [r.get('val_accuracy', 0.0) for r in self.fold_results]
         
         summary = {
             'mean_val_loss': float(torch.tensor(val_losses).mean().item()),
@@ -223,6 +227,8 @@ class KFoldTrainer:
             'std_val_slope': float(torch.tensor(val_slope).std().item()),
             'mean_best_val_loss': float(torch.tensor(best_val_losses).mean().item()),
             'std_best_val_loss': float(torch.tensor(best_val_losses).std().item()),
+            'mean_val_r2': float(torch.tensor(val_accuracies).mean().item()),
+            'std_val_r2': float(torch.tensor(val_accuracies).std().item()),
         }
         
         return summary
@@ -239,10 +245,13 @@ class KFoldTrainer:
         
         print(f"\nAverage Best Validation Loss: {summary['mean_best_val_loss']:.4f} ± {summary['std_best_val_loss']:.4f}")
         
+        print(f"\nAverage Validation R² (Accuracy): {summary['mean_val_r2']:.4f} ± {summary['std_val_r2']:.4f}")
+        
         print("\nPer-fold results:")
         for result in self.fold_results:
             print(f"  Fold {result['fold']}: Val Loss = {result['val_loss']:.4f} "
-                  f"(Best: {result['best_val_loss']:.4f} at epoch {result['best_epoch']})")
+                  f"(Best: {result['best_val_loss']:.4f} at epoch {result['best_epoch']}), "
+                  f"R² = {result.get('val_accuracy', 0.0):.4f}")
         
         print("\n" + "=" * 80)
         print("TEST SET EVALUATION")

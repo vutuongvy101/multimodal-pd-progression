@@ -20,6 +20,7 @@ if parent_dir not in sys.path:
 
 from models.v1_model import V1MultimodalTransformer
 from training.config import get_default_config
+from training.metrics import compute_comprehensive_metrics
 
 
 class V1Trainer:
@@ -67,11 +68,18 @@ class V1Trainer:
             'train_loss': [],
             'train_loss_next_visit': [],
             'train_loss_slope': [],
+            'train_r2': [],
             'val_loss': [],
             'val_loss_next_visit': [],
             'val_loss_slope': [],
+            'val_r2': [],
+            'val_accuracy': [],  # R² as accuracy metric
             'learning_rate': []
         }
+        
+        # Target names for metrics computation
+        self.target_names = getattr(config.features, 'all_updrs_totals', 
+                                     ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'])
         
         # Create save directory
         self.save_dir = Path(config.data.model_save_dir)
@@ -150,7 +158,7 @@ class V1Trainer:
     
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
-        """Validate on validation set"""
+        """Validate on validation set and compute metrics"""
         self.model.eval()
         
         epoch_losses = {
@@ -160,6 +168,11 @@ class V1Trainer:
         }
         
         n_batches = len(self.val_loader)
+        
+        # Accumulate predictions/targets for metrics
+        all_predictions = {"next_visit": [], "slope": []}
+        all_targets = {"next_visit": [], "next_visit_mask": [], "slope": []}
+        all_attention_masks = []
         
         for batch in tqdm(self.val_loader, desc="Validation"):
             # Move batch to device
@@ -199,12 +212,46 @@ class V1Trainer:
             # Update metrics
             for key in epoch_losses:
                 epoch_losses[key] += losses[key].item()
+            
+            # Accumulate for comprehensive metrics
+            all_predictions["next_visit"].append(predictions["next_visit"].detach().cpu())
+            all_predictions["slope"].append(predictions["slope"].detach().cpu())
+            all_targets["next_visit"].append(targets["next_visit"].detach().cpu())
+            if targets["next_visit_mask"] is not None:
+                all_targets["next_visit_mask"].append(targets["next_visit_mask"].detach().cpu())
+            all_targets["slope"].append(targets["slope"].detach().cpu())
+            all_attention_masks.append(batch["attention_mask"].detach().cpu())
         
         # Average losses
         for key in epoch_losses:
             epoch_losses[key] /= n_batches
         
-        return epoch_losses
+        # Compute comprehensive metrics
+        predictions_cat = {
+            "next_visit": torch.cat(all_predictions["next_visit"], dim=0),
+            "slope": torch.cat(all_predictions["slope"], dim=0),
+        }
+        targets_cat = {
+            "next_visit": torch.cat(all_targets["next_visit"], dim=0),
+            "slope": torch.cat(all_targets["slope"], dim=0),
+            "next_visit_mask": torch.cat(all_targets["next_visit_mask"], dim=0)
+            if all_targets["next_visit_mask"]
+            else None,
+        }
+        attention_mask_cat = torch.cat(all_attention_masks, dim=0)
+        
+        metrics = compute_comprehensive_metrics(
+            predictions_cat,
+            targets_cat,
+            attention_mask_cat,
+            target_names=self.target_names,
+        )
+        
+        # Extract overall R² as accuracy metric
+        # Note: compute_comprehensive_metrics returns "mean_r2" not "r2"
+        val_accuracy = metrics.get("next_visit_overall", {}).get("mean_r2", 0.0)
+        
+        return epoch_losses, metrics, val_accuracy
     
     def save_checkpoint(self, is_best: bool = False):
         """Save model checkpoint"""
@@ -252,7 +299,7 @@ class V1Trainer:
             train_losses = self.train_epoch()
             
             # Validate
-            val_losses = self.validate()
+            val_losses, val_metrics, val_accuracy = self.validate()
             
             # Update scheduler
             self.scheduler.step(val_losses['loss'])
@@ -264,9 +311,11 @@ class V1Trainer:
             self.training_history['val_loss'].append(val_losses['loss'])
             self.training_history['val_loss_next_visit'].append(val_losses['loss_next_visit'])
             self.training_history['val_loss_slope'].append(val_losses['loss_slope'])
+            self.training_history['val_r2'].append(val_accuracy)
+            self.training_history['val_accuracy'].append(val_accuracy)
             self.training_history['learning_rate'].append(self.optimizer.param_groups[0]['lr'])
             
-            # Print epoch summary
+            # Print epoch summary with accuracy
             print(f"\nEpoch {epoch}:")
             print(f"  Train Loss: {train_losses['loss']:.4f} "
                   f"(next: {train_losses['loss_next_visit']:.4f}, "
@@ -274,6 +323,7 @@ class V1Trainer:
             print(f"  Val Loss:   {val_losses['loss']:.4f} "
                   f"(next: {val_losses['loss_next_visit']:.4f}, "
                   f"slope: {val_losses['loss_slope']:.4f})")
+            print(f"  Val R² (Accuracy): {val_accuracy:.4f}")
             print(f"  LR: {self.optimizer.param_groups[0]['lr']:.2e}")
             
             # Check for improvement

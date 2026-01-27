@@ -351,7 +351,7 @@ class KFoldTrainer:
     def _load_model_for_evaluation(self, model_path: Path) -> V1MultimodalTransformer:
         """Load model from checkpoint for evaluation."""
         model = V1MultimodalTransformer(self.config)
-        checkpoint = torch.load(model_path, map_location=self.device)
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(self.device)
         model.eval()

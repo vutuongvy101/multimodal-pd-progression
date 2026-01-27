@@ -265,7 +265,7 @@ def train_single_split(config, prepared, args):
         if args.resume_mode == "full":
             trainer.load_checkpoint(str(checkpoint_path))
         else:
-            ckpt = torch.load(checkpoint_path, map_location=device)
+            ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
             model.load_state_dict(ckpt["model_state_dict"])
             print("  ✓ Loaded model weights (fresh optimizer/scheduler)")
 

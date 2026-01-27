@@ -33,20 +33,32 @@ class WarmupCosineAnnealingLR:
     def __init__(
         self,
         optimizer,
-        warmup_epochs=5,
+        warmup_epochs: Optional[int] = None,
+        warmup_ratio: float = 0.075,  # 7.5% of total epochs (middle of 5-10%)
         warmup_steps: Optional[int] = None,
         max_epochs=200,
         target_lr: Optional[float] = None,
-        min_lr: float = 5e-6
+        min_lr: Optional[float] = None,
+        min_lr_ratio: float = 0.1  # min_lr = target_lr * min_lr_ratio
     ):
         self.optimizer = optimizer
-        self.warmup_epochs = warmup_epochs
-        self.warmup_steps = warmup_steps
         self.max_epochs = max_epochs
         self.target_lr = target_lr or optimizer.param_groups[0]['lr']
-        self.min_lr = min_lr
         
-        # Warmup state
+        # Calculate warmup epochs dynamically if not provided
+        if warmup_epochs is None:
+            self.warmup_epochs = max(1, int(warmup_ratio * max_epochs))  # At least 1 epoch
+        else:
+            self.warmup_epochs = warmup_epochs
+        
+        self.warmup_steps = warmup_steps
+        
+        # Calculate min_lr from ratio if not provided
+        if min_lr is None:
+            self.min_lr = self.target_lr * min_lr_ratio
+        else:
+            self.min_lr = min_lr
+        
         self.current_epoch = 0
         self.current_step = 0
         self.in_warmup = True
@@ -81,13 +93,19 @@ class WarmupCosineAnnealingLR:
         # Cosine annealing phase
         if self.current_epoch >= self.warmup_epochs:
             # Calculate progress through cosine annealing (0 to 1)
-            progress = (self.current_epoch - self.warmup_epochs) / (self.max_epochs - self.warmup_epochs)
-            progress = min(progress, 1.0)  # Clamp to 1.0
-            
-            # Cosine annealing: lr = min_lr + (target_lr - min_lr) * (1 + cos(π * progress)) / 2
-            import math
-            lr = self.min_lr + (self.target_lr - self.min_lr) * (1 + math.cos(math.pi * progress)) / 2
-            self._set_lr(lr)
+            # Decay spans from warmup_end to max_epochs
+            decay_epochs = self.max_epochs - self.warmup_epochs
+            if decay_epochs > 0:
+                progress = (self.current_epoch - self.warmup_epochs) / decay_epochs
+                progress = min(progress, 1.0)  # Clamp to 1.0
+                
+                # Cosine annealing: lr = min_lr + (target_lr - min_lr) * (1 + cos(π * progress)) / 2
+                import math
+                lr = self.min_lr + (self.target_lr - self.min_lr) * (1 + math.cos(math.pi * progress)) / 2
+                self._set_lr(lr)
+            else:
+                # Edge case: warmup_epochs >= max_epochs
+                self._set_lr(self.target_lr)
     
     def _set_lr(self, lr):
         for param_group in self.optimizer.param_groups:
@@ -239,11 +257,11 @@ class V1Trainer:
         self.scheduler = WarmupCosineAnnealingLR(
             self.optimizer,
             warmup_epochs=training_config.warmup_epochs,
+            warmup_ratio=training_config.warmup_ratio,
             warmup_steps=training_config.warmup_steps,
             max_epochs=training_config.max_epochs,
             target_lr=training_config.learning_rate,
-            # min_lr=5e-6  # or 1e-6 as you prefer
-            min_lr=training_config.min_lr
+            min_lr_ratio=training_config.min_lr_ratio
         )
         
         self.lambda_slope = training_config.lambda_slope

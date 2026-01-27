@@ -394,20 +394,21 @@ class TrainingConfig:
     """Configuration for training"""
 
     # Optimization
-    learning_rate: float = 5e-5  # Reduced from 1e-4 for more stable training
-    weight_decay: float = 1e-4  # Increased from 1e-5 for better regularization
+    learning_rate: float = 5e-5 
+    weight_decay: float = 1e-4  
     batch_size: int = 32
     max_epochs: int = 200  # Increased from 100 to allow more training
     
     # Learning rate warmup
     warmup_epochs: int = 5  # Number of epochs for warmup
     warmup_steps: Optional[int] = None  # If set, uses steps instead of epochs
+    min_lr: float = 1e-6  # Minimum learning rate for cosine annealing
 
     # Loss weights
     lambda_slope: float = 0.2  # Weight for slope prediction loss
 
     # Early stopping
-    early_stopping_patience: int = 20  # Increased from 15 to be more patient
+    early_stopping_patience: int = 20  
 
     # Data
     min_visits_for_slope: int = 3

@@ -23,6 +23,79 @@ from models.v1_model import V1MultimodalTransformer
 from training.config import get_default_config
 from training.metrics import compute_comprehensive_metrics
 
+class WarmupCosineAnnealingLR:
+    """
+    Learning rate scheduler that combines warmup with cosine annealing.
+    
+    During warmup, linearly increases learning rate from 0 to target_lr.
+    After warmup, applies cosine annealing from target_lr down to min_lr.
+    """
+    def __init__(
+        self,
+        optimizer,
+        warmup_epochs=5,
+        warmup_steps: Optional[int] = None,
+        max_epochs=200,
+        target_lr: Optional[float] = None,
+        min_lr: float = 5e-6
+    ):
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.warmup_steps = warmup_steps
+        self.max_epochs = max_epochs
+        self.target_lr = target_lr or optimizer.param_groups[0]['lr']
+        self.min_lr = min_lr
+        
+        # Warmup state
+        self.current_epoch = 0
+        self.current_step = 0
+        self.in_warmup = True
+        
+    def step(self, metrics=None, epoch=None):
+        """Update learning rate based on epoch (metrics ignored for cosine annealing)"""
+        if epoch is not None:
+            self.current_epoch = epoch
+        
+        # Warmup phase
+        if self.in_warmup:
+            if self.warmup_steps is not None:
+                # Step-based warmup
+                self.current_step += 1
+                if self.current_step < self.warmup_steps:
+                    lr = self.target_lr * (self.current_step / self.warmup_steps)
+                    self._set_lr(lr)
+                    return
+                else:
+                    self.in_warmup = False
+                    self._set_lr(self.target_lr)
+            else:
+                # Epoch-based warmup
+                if self.current_epoch < self.warmup_epochs:
+                    lr = self.target_lr * ((self.current_epoch + 1) / self.warmup_epochs)
+                    self._set_lr(lr)
+                    return
+                else:
+                    self.in_warmup = False
+                    self._set_lr(self.target_lr)
+        
+        # Cosine annealing phase
+        if self.current_epoch >= self.warmup_epochs:
+            # Calculate progress through cosine annealing (0 to 1)
+            progress = (self.current_epoch - self.warmup_epochs) / (self.max_epochs - self.warmup_epochs)
+            progress = min(progress, 1.0)  # Clamp to 1.0
+            
+            # Cosine annealing: lr = min_lr + (target_lr - min_lr) * (1 + cos(π * progress)) / 2
+            import math
+            lr = self.min_lr + (self.target_lr - self.min_lr) * (1 + math.cos(math.pi * progress)) / 2
+            self._set_lr(lr)
+    
+    def _set_lr(self, lr):
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+    
+    def get_last_lr(self):
+        """Get the last learning rate"""
+        return [group['lr'] for group in self.optimizer.param_groups]
 
 class WarmupReduceLROnPlateau:
     """
@@ -153,14 +226,24 @@ class V1Trainer:
             weight_decay=training_config.weight_decay
         )
         
-        self.scheduler = WarmupReduceLROnPlateau(
+        # self.scheduler = WarmupReduceLROnPlateau(
+        #     self.optimizer,
+        #     mode='min',
+        #     factor=0.5,
+        #     patience=5,
+        #     warmup_epochs=training_config.warmup_epochs,
+        #     warmup_steps=training_config.warmup_steps,
+        #     target_lr=training_config.learning_rate
+        # )
+
+        self.scheduler = WarmupCosineAnnealingLR(
             self.optimizer,
-            mode='min',
-            factor=0.5,
-            patience=5,
             warmup_epochs=training_config.warmup_epochs,
             warmup_steps=training_config.warmup_steps,
-            target_lr=training_config.learning_rate
+            max_epochs=training_config.max_epochs,
+            target_lr=training_config.learning_rate,
+            # min_lr=5e-6  # or 1e-6 as you prefer
+            min_lr=training_config.min_lr
         )
         
         self.lambda_slope = training_config.lambda_slope

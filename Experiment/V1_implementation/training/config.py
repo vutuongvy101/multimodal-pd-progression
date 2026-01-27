@@ -400,9 +400,9 @@ class TrainingConfig:
     max_epochs: int = 200
     
     # Learning rate warmup
-    warmup_epochs: Optional[int] = None  # If None, calculated from warmup_ratio
-    warmup_ratio: float = 0.075  # 7.5% of total epochs (middle of 5-10% range)
-    warmup_steps: Optional[int] = None  # If set, uses steps instead of epochs
+    warmup_epochs: Optional[int] = None
+    warmup_ratio: float = 0.1
+    warmup_steps: Optional[int] = None
     min_lr_ratio: float = 0.1  # Minimum learning rate ratio (min_lr = target_lr * min_lr_ratio)
 
     # Loss weights

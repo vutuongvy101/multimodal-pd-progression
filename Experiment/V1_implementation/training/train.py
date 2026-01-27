@@ -13,6 +13,7 @@ from typing import Dict, Tuple, Optional, List
 import sys
 import os
 import math
+from training.config import Config
 
 # Add parent directory (V1_implementation) to path for imports
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -220,12 +221,13 @@ class V1Trainer:
     def __init__(
         self,
         model: V1MultimodalTransformer,
-        config: Dict,
+        config: Config,
         train_loader: DataLoader,
         val_loader: DataLoader,
         device: str = 'cuda'
     ):
         self.model = model.to(device)
+        self.__print_architecture__()
         self.config = config
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -280,6 +282,18 @@ class V1Trainer:
         
         self.save_dir = Path(config.data.model_save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
+
+    def __print_architecture__(self):
+        print("=" * 80)
+        print("Model Architecture:")
+        print("=" * 80)
+        print(self.model)
+        print("=" * 80)
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+        print("=" * 80)
         
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch"""

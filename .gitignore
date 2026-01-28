@@ -10,3 +10,7 @@ __pycache__/
 *.pyc
 .DS_Store
 Experiment/V1_implementation/tests/test_outputs/
+
+# Ignore model weight
+*.pt
+*.pth

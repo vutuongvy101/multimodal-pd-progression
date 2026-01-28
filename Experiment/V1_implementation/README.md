@@ -1127,7 +1127,13 @@ huggingface-cli login
 #### Usage
 
 ```bash
-huggingface-cli upload bibbbu/SRI-PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/ . --allow-patterns="*.pt"
+# UPLOAD
+huggingface-cli upload bibbbu/SRI-PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/  modalities_age_at_visit+medication+motor+non_motor+static/. --allow-patterns="*.pt"
+# hf upload bibbbu/SRI-PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/ modalities_age_at_visit+medication+motor+non_motor+static/ --include="*.pt"
+
+# DELETE
+# delete all .pt file
+# hf repo-files delete bibbbu/SRI-PD-v1 "*.pt"
 ```
 
 ## Metrics and Evaluation

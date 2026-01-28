@@ -1115,46 +1115,20 @@ The `upload_checkpoints.py` script (located in `Experiment/`) allows you to uplo
 ##### Install the Hugging Face CLI (if not installed)
 ```bash
 brew install huggingface-cli
+# curl -LsSf https://hf.co/cli/install.sh | bash
 ```
 
 ##### (optional) Login with your Hugging Face credentials
 ```bash
 huggingface-cli login
+# hf auth login
 ```
 
 #### Usage
 
 ```bash
-# Dry run to see what will be uploaded (recommended first step)
-python ../upload_checkpoints.py --dry-run
-
-# Upload to default repository (bibbbu/SRI-PD-v1)
-# Default checkpoints directory: V1_implementation/models/checkpoints
-python ../upload_checkpoints.py
-
-# Upload to a different repository
-python ../upload_checkpoints.py --repo-id username/repo-name
-
-# Use a specific token instead of cached credentials
-python ../upload_checkpoints.py --token hf_xxxxx
-
-# Specify a custom checkpoints directory
-python ../upload_checkpoints.py --checkpoints-dir /path/to/checkpoints
+huggingface-cli upload bibbbu/SRI-PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/ . --allow-patterns="*.pt"
 ```
-
-#### What Gets Uploaded
-
-The script uploads all model weight (.pt) from the `models/checkpoints/` directory.
-
-#### Command-Line Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--repo-id` | Hugging Face repository ID | `bibbbu/SRI-PD-v1` |
-| `--token` | Hugging Face token (optional if already logged in) | Uses cached credentials |
-| `--checkpoints-dir` | Path to checkpoints directory | `V1_implementation/models/checkpoints` (relative to script) |
-| `--dry-run` | Preview what would be uploaded without uploading | `False` |
----
 
 ## Metrics and Evaluation
 

@@ -20,3 +20,5 @@ torch>=2.0
 # Tests (optional but included because tests import pytest)
 pytest>=7.0
 
+huggingface_hub
+

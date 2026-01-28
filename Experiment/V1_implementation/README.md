@@ -1106,6 +1106,54 @@ results = multi_modal_trainer.train_multiple(
 | Slope Spearman correlation | r > 0.5 | With empirical slopes (per-target, NP3TOT most important) |
 | ON vs OFF gap | 5-10 points | NP3TOT medication effect (NP2PTOT also shows effect) |
 
+### Uploading Checkpoints to Hugging Face
+
+The `upload_checkpoints.py` script (located in `Experiment/`) allows you to upload all model checkpoints to Hugging Face Hub for easy sharing and version control.
+
+#### Prerequisite
+
+##### Install the Hugging Face CLI (if not installed)
+```bash
+brew install huggingface-cli
+```
+
+##### (optional) Login with your Hugging Face credentials
+```bash
+huggingface-cli login
+```
+
+#### Usage
+
+```bash
+# Dry run to see what will be uploaded (recommended first step)
+python ../upload_checkpoints.py --dry-run
+
+# Upload to default repository (bibbbu/SRI-PD-v1)
+# Default checkpoints directory: V1_implementation/models/checkpoints
+python ../upload_checkpoints.py
+
+# Upload to a different repository
+python ../upload_checkpoints.py --repo-id username/repo-name
+
+# Use a specific token instead of cached credentials
+python ../upload_checkpoints.py --token hf_xxxxx
+
+# Specify a custom checkpoints directory
+python ../upload_checkpoints.py --checkpoints-dir /path/to/checkpoints
+```
+
+#### What Gets Uploaded
+
+The script uploads all model weight (.pt) from the `models/checkpoints/` directory.
+
+#### Command-Line Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--repo-id` | Hugging Face repository ID | `bibbbu/SRI-PD-v1` |
+| `--token` | Hugging Face token (optional if already logged in) | Uses cached credentials |
+| `--checkpoints-dir` | Path to checkpoints directory | `V1_implementation/models/checkpoints` (relative to script) |
+| `--dry-run` | Preview what would be uploaded without uploading | `False` |
 ---
 
 ## Metrics and Evaluation

@@ -10,7 +10,6 @@ nohup python -u -m training.main \
   --patience 10 \
   --n-splits 10 \
   --evaluate-test \
-  --force-retrain \
   > train_all.log 2>&1 &
 
 # Terminal 2: Train static+motor

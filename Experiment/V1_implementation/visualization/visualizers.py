@@ -6,7 +6,7 @@ from .config import VizConfig
 from .io import PlotIO
 from .history import History
 from .collection import HistoryCollection
-from .plotters import CurvesPlotter, DeltaTBucketsPlotter, SlopeMetricsPlotter
+from .plotters import CurvesPlotter, DeltaTBucketsPlotter, SlopeMetricsPlotter, DetailedMetricsPlotter
 
 
 class SingleRunVisualizer:
@@ -15,6 +15,7 @@ class SingleRunVisualizer:
         self.curves = CurvesPlotter()
         self.dt = DeltaTBucketsPlotter()
         self.slope = SlopeMetricsPlotter()
+        self.detailed = DetailedMetricsPlotter()  # Add detailed plotter
 
     def run(self, history_path: str, output_dir: str, show: bool = True, title: str = "run") -> None:
         h = History.load(history_path)
@@ -23,6 +24,7 @@ class SingleRunVisualizer:
         self.curves.plot_single(h, io, title=f"{title} - training")
         self.dt.plot_single(h, io, self.cfg, title=f"{title} - next_visit")
         self.slope.plot_single(h, io, title=f"{title} - slope")
+        self.detailed.plot_single(h, io, self.cfg, title=f"{title} - detailed")  # Add detailed visualization
 
 
 class KFoldVisualizer:

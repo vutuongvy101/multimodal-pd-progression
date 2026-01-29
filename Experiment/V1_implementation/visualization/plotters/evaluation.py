@@ -549,6 +549,94 @@ class EvaluationPlotter:
 
         print(f"✓ All evaluation plots saved to {io.output_dir}")
 
+    def plot_updrs_predictions_with_uncertainty(
+            self,
+            pred_mean,  # [N,4]
+            actuals,  # [N,4]
+            time_months,  # [N]
+            io,
+            pred_std=None,  # [N,4]  -> band = mean ± z*std
+            pred_lower=None,  # [N,4]  -> band = [lower, upper]
+            pred_upper=None,  # [N,4]
+            z=1.96,
+            title: str = "UPDRS: Actual vs Predicted (with Uncertainty)",
+            filename: str = "updrs_pred_with_uncertainty.png",
+    ) -> None:
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        def to_np(x):
+            try:
+                import torch
+                if isinstance(x, torch.Tensor):
+                    return x.detach().cpu().numpy()
+            except Exception:
+                pass
+            return np.asarray(x)
+
+        mu = to_np(pred_mean)
+        y = to_np(actuals)
+        t = to_np(time_months)
+
+        s = to_np(pred_std) if pred_std is not None else None
+        lo = to_np(pred_lower) if pred_lower is not None else None
+        hi = to_np(pred_upper) if pred_upper is not None else None
+
+        use_std_band = s is not None
+        use_quantile_band = (lo is not None and hi is not None)
+        if not (use_std_band or use_quantile_band):
+            raise ValueError("Provide either pred_std OR (pred_lower and pred_upper) for uncertainty bands.")
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        axes = axes.flatten()
+
+        for k in range(4):
+            ax = axes[k]
+
+            mu_k = mu[:, k]
+            y_k = y[:, k]
+
+            valid = np.isfinite(t) & np.isfinite(mu_k) & np.isfinite(y_k)
+            if use_std_band:
+                valid &= np.isfinite(s[:, k])
+            else:
+                valid &= np.isfinite(lo[:, k]) & np.isfinite(hi[:, k])
+
+            if valid.sum() == 0:
+                ax.text(0.5, 0.5, "No valid data", ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(f"{self.target_names[k]} - No Data")
+                ax.grid(True, alpha=0.3)
+                continue
+
+            tt = t[valid]
+            yy = y_k[valid]
+            mm = mu_k[valid]
+            order = np.argsort(tt)
+            tt, yy, mm = tt[order], yy[order], mm[order]
+
+            if use_std_band:
+                ss = s[valid, k][order]
+                band_lo = mm - z * ss
+                band_hi = mm + z * ss
+                band_label = f"Pred ±{z}σ"
+            else:
+                band_lo = lo[valid, k][order]
+                band_hi = hi[valid, k][order]
+                band_label = "Pred interval"
+
+            ax.scatter(tt, yy, s=35, alpha=0.6, color="steelblue", label="Actual")
+            ax.plot(tt, mm, linewidth=2.0, color="orange", label="Pred mean")
+            ax.fill_between(tt, band_lo, band_hi, color="orange", alpha=0.18, label=band_label)
+
+            ax.set_xlabel("Months Since Baseline", fontsize=10)
+            ax.set_ylabel(f"{self.target_names[k]} Score", fontsize=10)
+            ax.set_title(f"{self.target_names[k]}", fontsize=11, fontweight="bold")
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=9, loc="best")
+
+        fig.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
+        io.save(filename)
+
 
 @torch.no_grad()
 def evaluate_fold_checkpoint(

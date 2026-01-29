@@ -1136,7 +1136,7 @@ huggingface-cli upload SRI-HRI/PD-v1 modalities_age_at_visit+medication+motor+no
 # hf repo-files delete SRI-HRI/PD-v1 "*.pt"
 
 # DOWNLOAD 
-# huggingface-cli download SRI-HRI/PD-v11 modalities_age_at_visit+medication+motor+non_motor+static/fold_7/best_checkpoint.pt --local-dir models/checkpoints/
+# huggingface-cli download SRI-HRI/PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/fold_7/best_checkpoint.pt --local-dir models/checkpoints/
 ```
 
 ## Metrics and Evaluation

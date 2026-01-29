@@ -188,8 +188,10 @@ class DataIntegrator:
         # Initialize feature scalers (one per feature type)
         self.static_scaler = FeatureScaler() if normalize_features else None
         self.motor_scaler = FeatureScaler() if normalize_features else None
-        self.updrs_supplementary_scaler = FeatureScaler() if normalize_features else None
-        self.non_motor_scaler = FeatureScaler() if normalize_features else None
+        self.cognitive_loader = FeatureScaler() if normalize_features else None
+        self.behavioral_loader = FeatureScaler() if normalize_features else None
+        self.sleep_loader = FeatureScaler() if normalize_features else None
+        self.smell_loader = FeatureScaler() if normalize_features else None
         self.medication_scaler = FeatureScaler() if normalize_features else None
         self.age_at_visit_scaler = FeatureScaler() if normalize_features else None
         
@@ -515,30 +517,63 @@ class DataIntegrator:
                 self.motor_scaler.fit_transform(motor_values, motor_mask, motor_cols)
                 print(f"  ✓ Fitted motor scaler: {len(motor_cols)} features")
         
-        # Fit UPDRS supplementary scaler
-        updrs_supplementary_features = getattr(self.config.features, 'updrs_supplementary_features', [])
-        if isinstance(updrs_supplementary_features, (list, tuple, set)) and updrs_supplementary_features:
-            updrs_supplementary_cols = [c for c in updrs_supplementary_features if c in longitudinal_df.columns]
-            if updrs_supplementary_cols and self.updrs_supplementary_scaler:
-                updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
-                    longitudinal_df, updrs_supplementary_cols, scaler=None
-                )
-                self.updrs_supplementary_scaler.fit_transform(
-                    updrs_supplementary_values, updrs_supplementary_mask, updrs_supplementary_cols
-                )
-                print(f"  ✓ Fitted UPDRS supplementary scaler: {len(updrs_supplementary_cols)} features")
+        # # Fit UPDRS supplementary scaler
+        # updrs_supplementary_features = getattr(self.config.features, 'updrs_supplementary_features', [])
+        # if isinstance(updrs_supplementary_features, (list, tuple, set)) and updrs_supplementary_features:
+        #     updrs_supplementary_cols = [c for c in updrs_supplementary_features if c in longitudinal_df.columns]
+        #     if updrs_supplementary_cols and self.updrs_supplementary_scaler:
+        #         updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
+        #             longitudinal_df, updrs_supplementary_cols, scaler=None
+        #         )
+        #         self.updrs_supplementary_scaler.fit_transform(
+        #             updrs_supplementary_values, updrs_supplementary_mask, updrs_supplementary_cols
+        #         )
+        #         print(f"  ✓ Fitted UPDRS supplementary scaler: {len(updrs_supplementary_cols)} features")
         
-        # Fit non-motor scaler
-        non_motor_features = getattr(self.config.features, 'non_motor_features', [])
-        if isinstance(non_motor_features, (list, tuple, set)) and non_motor_features:
-            non_motor_cols = [c for c in non_motor_features if c in longitudinal_df.columns]
-            if non_motor_cols and self.non_motor_scaler:
-                non_motor_values, non_motor_mask = self.create_missingness_masks(
-                    longitudinal_df, non_motor_cols, scaler=None
+        # Fit behavioral scaler
+        behavioral_features = getattr(self.config.features, 'behavioral_features', [])
+        if isinstance(behavioral_features, (list, tuple, set)) and behavioral_features:
+            behavioral_cols = [c for c in behavioral_features if c in longitudinal_df.columns]
+            if behavioral_cols and self.behavioral_loader:
+                behavioral_values, behavioral_mask = self.create_missingness_masks(
+                    longitudinal_df, behavioral_cols, scaler=None
                 )
-                self.non_motor_scaler.fit_transform(non_motor_values, non_motor_mask, non_motor_cols)
-                print(f"  ✓ Fitted non-motor scaler: {len(non_motor_cols)} features")
-        
+                self.behavioral_loader.fit_transform(behavioral_values, behavioral_mask, behavioral_cols)
+                print(f"  ✓ Fitted behavioral scaler: {len(behavioral_cols)} features")
+
+        # Fit cognitive scaler
+        cognitive_features = getattr(self.config.features, 'cognitive_features', [])
+        if isinstance(cognitive_features, (list, tuple, set)) and cognitive_features:
+            cognitive_cols = [c for c in cognitive_features if c in longitudinal_df.columns]
+            if cognitive_cols and self.cognitive_loader:
+                cognitive_values, cognitive_mask = self.create_missingness_masks(
+                    longitudinal_df, cognitive_cols, scaler=None
+                )
+                self.cognitive_loader.fit_transform(cognitive_values, cognitive_mask, cognitive_cols)
+                print(f"  ✓ Fitted cognitive scaler: {len(cognitive_cols)} features")
+
+        # Fit sleep scaler
+        sleep_features = getattr(self.config.features, 'sleep_features', [])
+        if isinstance(sleep_features, (list, tuple, set)) and sleep_features:
+            sleep_cols = [c for c in sleep_features if c in longitudinal_df.columns]
+            if sleep_cols and self.sleep_loader:
+                sleep_values, sleep_mask = self.create_missingness_masks(
+                    longitudinal_df, sleep_cols, scaler=None
+                )
+                self.sleep_loader.fit_transform(sleep_values, sleep_mask, sleep_cols)
+                print(f"  ✓ Fitted sleep scaler: {len(sleep_cols)} features")
+
+        # Fit smell scaler
+        smell_features = getattr(self.config.features, 'smell_features', [])
+        if isinstance(smell_features, (list, tuple, set)) and smell_features:
+            smell_cols = [c for c in smell_features if c in longitudinal_df.columns]
+            if smell_cols and self.smell_loader:
+                smell_values, smell_mask = self.create_missingness_masks(
+                    longitudinal_df, smell_cols, scaler=None
+                )
+                self.smell_loader.fit_transform(smell_values, smell_mask, smell_cols)
+                print(f"  ✓ Fitted smell scaler: {len(smell_cols)} features")
+
         # Fit medication scaler
         medication_features = getattr(self.config.features, 'medication_features', [])
         if isinstance(medication_features, (list, tuple, set)) and medication_features:
@@ -593,12 +628,18 @@ class DataIntegrator:
             self.static_scaler = None
         if not hasattr(self, 'motor_scaler'):
             self.motor_scaler = None
-        if not hasattr(self, 'updrs_supplementary_scaler'):
-            self.updrs_supplementary_scaler = None
-        if not hasattr(self, 'non_motor_scaler'):
-            self.non_motor_scaler = None
+        if not hasattr(self, 'cognitive_scaler'):
+            self.cognitive_scaler = None
+        if not hasattr(self, 'behavioral_scaler'):
+            self.behavioral_scaler = None
+        if not hasattr(self, 'sleep_scaler'):
+            self.sleep_scaler = None
+        if not hasattr(self, 'smell_scaler'):
+            self.smell_scaler = None
         if not hasattr(self, 'medication_scaler'):
             self.medication_scaler = None
+        if not hasattr(self, 'age_at_visit_scaler'):
+            self.age_at_visit_scaler = None
         
         # Static Features 
         static_cols = [c for c in self.config.features.static_features if c in static_df.columns]
@@ -627,23 +668,28 @@ class DataIntegrator:
             # Get feature column lists from config
             # Use getattr with defaults so tests can provide partial mock configs
             motor_features = getattr(self.config.features, 'motor_features', [])
-            updrs_supplementary_features = getattr(self.config.features, 'updrs_supplementary_features', [])
             non_motor_features = getattr(self.config.features, 'non_motor_features', [])
             medication_features = getattr(self.config.features, 'medication_features', [])
 
             # If a Mock() provides attributes but they aren't iterable lists, treat as empty.
             if not isinstance(motor_features, (list, tuple, set)):
                 motor_features = []
-            if not isinstance(updrs_supplementary_features, (list, tuple, set)):
-                updrs_supplementary_features = []
-            if not isinstance(non_motor_features, (list, tuple, set)):
-                non_motor_features = []
+            if not isinstance(cognitive_features, (list, tuple, set)):
+                cognitive_features = []
+            if not isinstance(behavioral_features, (list, tuple, set)):
+                behavioral_features = []
+            if not isinstance(sleep_features, (list, tuple, set)):
+                sleep_features = []
+            if not isinstance(smell_features, (list, tuple, set)):
+                smell_features = []
             if not isinstance(medication_features, (list, tuple, set)):
                 medication_features = []
 
             motor_cols = [c for c in motor_features if c in longitudinal_df.columns]
-            updrs_supplementary_cols = [c for c in updrs_supplementary_features if c in longitudinal_df.columns]
-            non_motor_cols = [c for c in non_motor_features if c in longitudinal_df.columns]
+            cognitive_cols = [c for c in cognitive_features if c in longitudinal_df.columns]
+            behavioral_cols = [c for c in behavioral_features if c in longitudinal_df.columns]
+            sleep_cols = [c for c in sleep_features if c in longitudinal_df.columns]
+            smell_cols = [c for c in smell_features if c in longitudinal_df.columns]
             med_cols = [c for c in medication_features if c in longitudinal_df.columns]
             
             # Group by patient
@@ -678,32 +724,58 @@ class DataIntegrator:
                         visit_dict['motor_values'] = np.array([])
                         visit_dict['motor_mask'] = np.array([])
                     
-                    # UPDRS supplementary features
-                    if updrs_supplementary_cols:
-                        updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
+                    # Cognitive features
+                    if cognitive_cols:
+                        cognitive_values, cognitive_mask = self.create_missingness_masks(
                             pd.DataFrame([visit_row]),
-                            updrs_supplementary_cols,
-                            scaler=self.updrs_supplementary_scaler
+                            cognitive_cols,
+                            scaler=self.cognitive_scaler
                         )
-                        visit_dict['updrs_supplementary_values'] = updrs_supplementary_values[0]
-                        visit_dict['updrs_supplementary_mask'] = updrs_supplementary_mask[0]
+                        visit_dict['cognitive_values'] = cognitive_values[0]
+                        visit_dict['cognitive_mask'] = cognitive_mask[0]
                     else:
-                        visit_dict['updrs_supplementary_values'] = np.array([])
-                        visit_dict['updrs_supplementary_mask'] = np.array([])
+                        visit_dict['cognitive_values'] = np.array([])
+                        visit_dict['cognitive_mask'] = np.array([])
                     
-                    # Non-motor features
-                    if non_motor_cols:
-                        non_motor_values, non_motor_mask = self.create_missingness_masks(
+                    # Behavioral features
+                    if behavioral_cols:
+                        behavioral_values, behavioral_mask = self.create_missingness_masks(
                             pd.DataFrame([visit_row]),
-                            non_motor_cols,
-                            scaler=self.non_motor_scaler
+                            behavioral_cols,
+                            scaler=self.behavioral_loader
                         )
-                        visit_dict['non_motor_values'] = non_motor_values[0]
-                        visit_dict['non_motor_mask'] = non_motor_mask[0]
+                        visit_dict['behavioral_values'] = behavioral_values[0]
+                        visit_dict['behavioral_mask'] = behavioral_mask[0]
                     else:
-                        visit_dict['non_motor_values'] = np.array([])
-                        visit_dict['non_motor_mask'] = np.array([])
-                    
+                        visit_dict['behavioral_values'] = np.array([])
+                        visit_dict['behavioral_mask'] = np.array([])
+
+                    # Sleep features
+                    if sleep_cols:
+                        sleep_values, sleep_mask = self.create_missingness_masks(
+                            pd.DataFrame([visit_row]),
+                            sleep_cols,
+                            scaler=self.sleep_loader
+                        )
+                        visit_dict['sleep_values'] = sleep_values[0]
+                        visit_dict['sleep_mask'] = sleep_mask[0]
+                    else:
+                        visit_dict['sleep_values'] = np.array([])
+                        visit_dict['sleep_mask'] = np.array([])
+
+                    # Smell features
+                    if smell_cols:
+                        smell_values, smell_mask = self.create_missingness_masks(
+                            pd.DataFrame([visit_row]),
+                            smell_cols,
+                            scaler=self.smell_loader
+                        )
+                        visit_dict['smell_values'] = smell_values[0]
+                        visit_dict['smell_mask'] = smell_mask[0]
+                    else:
+                        visit_dict['smell_values'] = np.array([])
+                        visit_dict['smell_mask'] = np.array([])
+
                     # Medication features
                     if med_cols:
                         med_values, med_mask = self.create_missingness_masks(
@@ -724,19 +796,19 @@ class DataIntegrator:
                         visit_dict['time_months'] = 0.0
                     
                     # UPDRS totals (targets for next-visit prediction)
-                    updrs_totals = self.config.features.all_updrs_totals
-                    updrs_values = []
-                    for total in updrs_totals:
+                    overall_motor_severity_score = self.config.features.overall_motor_severity_score
+                    overall_motor_severity_score = []
+                    for total in overall_motor_severity_score:
                         if total in visit_row:
                             val = float(visit_row[total]) if pd.notna(visit_row[total]) else np.nan
                         else:
                             val = np.nan
-                        updrs_values.append(val)
-                    # Array of UPDRS totals: [NP1RTOT, NP2PTOT, NP3TOT, NP4TOT] from all_updrs_totals
-                    visit_dict['updrs_totals'] = np.array(updrs_values)  # [4]
+                        overall_motor_severity_score.append(val)
+                    # Array of UPDRS totals: [NP2PTOT, NP3TOT, NP4TOT] from overall_motor_severity_score
+                    visit_dict['updrs_totals'] = np.array(overall_motor_severity_score)  # [4]
                     
                     # Keep np3tot for backward compatibility (single value)
-                    visit_dict['np3tot'] = updrs_values[2] if len(updrs_values) > 2 else np.nan
+                    visit_dict['np3tot'] = overall_motor_severity_score[2] if len(overall_motor_severity_score) > 2 else np.nan
                     
                     visits.append(visit_dict)
                 
@@ -745,7 +817,7 @@ class DataIntegrator:
             # Empty longitudinal data - create empty structure
             print("WARNING: No longitudinal data available")
         
-        # Slopes - extract all UPDRS total slopes for each patient
+        # Slopes - extract overall motor severity score slopes for each patient
         slopes = {}
         all_patnos = list(static_data.keys())
         
@@ -753,7 +825,7 @@ class DataIntegrator:
         for patno in all_patnos:
             slopes[patno] = {
                 f'{total}_slope': float('nan')
-                for total in self.config.features.all_updrs_totals
+                for total in self.config.features.overall_motor_severity_score
             }
         
         # Fill in computed slopes from slopes_df
@@ -763,8 +835,8 @@ class DataIntegrator:
                 if patno not in slopes:
                     continue
                 
-                # Extract slope for each UPDRS total
-                for total in self.config.features.all_updrs_totals:
+                # Extract slope for each overall motor severity score
+                for total in self.config.features.overall_motor_severity_score:
                     slope_col = f'{total}_slope'
                     if slope_col in row and pd.notna(row[slope_col]):
                         slopes[patno][slope_col] = float(row[slope_col])
@@ -956,8 +1028,6 @@ class DataIntegrator:
         print("\n--- Aligning Modalities to Visit Index ---")
         
         motor_cols = [c for c in self.config.features.motor_features if c in motor_df.columns]
-        updrs_supplementary_cols = [c for c in self.config.features.updrs_supplementary_features 
-                                   if c in motor_df.columns]
         cognitive_cols = [c for c in self.config.features.cognitive_features 
                         if c in cognitive_df.columns]
         behavioral_cols = [c for c in self.config.features.behavioral_features 
@@ -967,7 +1037,7 @@ class DataIntegrator:
         smell_cols = [c for c in self.config.features.smell_features 
                         if c in smell_df.columns]
         med_cols = [c for c in self.config.features.medication_features if c in medication_df.columns]
-        updrs_total_cols = self.config.features.overall_motor_severity_score
+        overall_motor_severity_score_cols = self.config.features.overall_motor_severity_score
         age_at_visit_cols = self.config.features.age_at_visit_features
         
         # Create per-patient longitudinal data
@@ -990,18 +1060,6 @@ class DataIntegrator:
                 else:
                     visit_dict['motor_values'] = np.zeros(len(motor_cols) if motor_cols else 0, dtype=np.float32)
                     visit_dict['motor_mask'] = np.ones(len(motor_cols) if motor_cols else 0, dtype=np.float32)
-                
-                # UPDRS supplementary features from motor assessments
-                updrs_supplementary_visit = motor_df[(motor_df['PATNO'] == patno) & (motor_df['EVENT_ID'] == event_id)]
-                if len(updrs_supplementary_visit) > 0 and updrs_supplementary_cols:
-                    updrs_supplementary_values, updrs_supplementary_mask = self.create_missingness_masks(
-                        updrs_supplementary_visit, updrs_supplementary_cols, scaler=self.updrs_supplementary_scaler
-                    )
-                    visit_dict['updrs_supplementary_values'] = updrs_supplementary_values[0]
-                    visit_dict['updrs_supplementary_mask'] = updrs_supplementary_mask[0]
-                else:
-                    visit_dict['updrs_supplementary_values'] = np.zeros(len(updrs_supplementary_cols) if updrs_supplementary_cols else 0, dtype=np.float32)
-                    visit_dict['updrs_supplementary_mask'] = np.ones(len(updrs_supplementary_cols) if updrs_supplementary_cols else 0, dtype=np.float32)
                 
                 # Cognitive features
                 cognitive_visit = cognitive_df[(cognitive_df['PATNO'] == patno) & (cognitive_df['EVENT_ID'] == event_id)] if len(cognitive_df) > 0 else pd.DataFrame()
@@ -1070,16 +1128,16 @@ class DataIntegrator:
                 
                 # UPDRS totals (targets)
                 motor_visit = motor_df[(motor_df['PATNO'] == patno) & (motor_df['EVENT_ID'] == event_id)]
-                updrs_values = []
-                for total in updrs_total_cols:
+                overall_motor_severity_score_values = []
+                for total in overall_motor_severity_score_cols:
                     if len(motor_visit) > 0 and total in motor_visit.columns:
                         val = motor_visit[total].iloc[0]
                         val = float(val) if pd.notna(val) else np.nan
                     else:
                         val = np.nan
-                    updrs_values.append(val)
-                visit_dict['updrs_totals'] = np.array(updrs_values, dtype=np.float32)
-                visit_dict['np3tot'] = updrs_values[2] if len(updrs_values) > 2 else np.nan  # Backward compatibility
+                    overall_motor_severity_score_values.append(val)
+                visit_dict['overall_motor_severity_score'] = np.array(overall_motor_severity_score_values, dtype=np.float32)
+                visit_dict['np3tot'] = overall_motor_severity_score_values[2] if len(overall_motor_severity_score_values) > 2 else np.nan  # Backward compatibility
                 
                 visits.append(visit_dict)
             
@@ -1087,8 +1145,10 @@ class DataIntegrator:
         
         print(f"  ✓ Longitudinal data: {sum(len(v) for v in longitudinal_data.values())} visits")
         print(f"    Motor features: {len(motor_cols)}")
-        print(f"    UPDRS supplementary features: {len(updrs_supplementary_cols)}")
-        print(f"    Non-motor features: {len(non_motor_cols)}")
+        print(f"    Cognitive features: {len(cognitive_cols)}")
+        print(f"    Behavioral features: {len(behavioral_cols)}")
+        print(f"    Sleep features: {len(sleep_cols)}")
+        print(f"    Smell features: {len(smell_cols)}")
         print(f"    Medication features: {len(med_cols)}")
         
         # Compute slopes
@@ -1103,7 +1163,7 @@ class DataIntegrator:
         for patno in valid_patnos:
             slopes[patno] = {
                 f'{total}_slope': float('nan')
-                for total in self.config.features.all_updrs_totals
+                for total in self.config.features.overall_motor_severity_score
             }
         
         if not slopes_df.empty:
@@ -1111,7 +1171,7 @@ class DataIntegrator:
                 patno = row['PATNO']
                 if patno not in slopes:
                     continue
-                for total in self.config.features.all_updrs_totals:
+                for total in self.config.features.overall_motor_severity_score:
                     slope_col = f'{total}_slope'
                     if slope_col in row and pd.notna(row[slope_col]):
                         slopes[patno][slope_col] = float(row[slope_col])

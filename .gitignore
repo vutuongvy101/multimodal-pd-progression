@@ -14,3 +14,4 @@ Experiment/V1_implementation/tests/test_outputs/
 # Ignore model weight
 *.pt
 *.pth
+*.cache

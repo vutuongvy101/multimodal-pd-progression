@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 try:
     from sklearn.model_selection import KFold
 except ImportError:
@@ -151,6 +151,7 @@ class PPMILongitudinalDataset(Dataset):
         
         slope_target = torch.FloatTensor(slope_values)  # [4]
         return {
+            'patno': patno,
             'static_values': static_values,
             'static_mask': static_mask,
             'motor_values': motor_values,
@@ -183,6 +184,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         - next_visit_label_mask: Which target labels are available (not NaN)
     """
     # Static features (no padding needed)
+    patno = torch.LongTensor([item['patno'] for item in batch])
     static_values = torch.stack([item['static_values'] for item in batch])
     static_mask = torch.stack([item['static_mask'] for item in batch])
     
@@ -248,6 +250,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     slope_targets = torch.stack([item['slope_target'] for item in batch])  # [batch, 4]
     
     return {
+        'patno': patno,
         'static_values': static_values,
         'static_mask': static_mask,
         'motor_values': motor_values_padded,
@@ -459,7 +462,9 @@ def create_kfold_dataloaders(
     n_splits: int = 5,
     num_workers: int = 0,
     test_ratio: float = 0.2,
-    random_seed: int = 42
+    random_seed: int = 42,
+    debug_longitudinal_csv: Optional[str] = None,
+    debug_longitudinal_max_rows: Optional[int] = None
 ) -> Tuple[List[Tuple[DataLoader, DataLoader]], DataLoader]:
     """
     Create k-fold cross-validation dataloaders with proper feature scaling.
@@ -491,6 +496,7 @@ def create_kfold_dataloaders(
         sys.path.insert(0, parent_dir)
     
     from data.data_integrator import DataIntegrator
+    from data.debug_dump import dump_longitudinal_csv
     
     if KFold is None:
         raise ImportError(
@@ -508,6 +514,15 @@ def create_kfold_dataloaders(
         )
     
     static_df = prepared_data['static']
+
+    # Optional debug dump before any split or scaling
+    if debug_longitudinal_csv:
+        dump_path = dump_longitudinal_csv(
+            prepared_data,
+            debug_longitudinal_csv,
+            max_rows=debug_longitudinal_max_rows
+        )
+        print(f"  [DEBUG] Longitudinal CSV written: {dump_path}")
     
     # Get all patient IDs
     patient_ids = static_df['PATNO'].unique().tolist()

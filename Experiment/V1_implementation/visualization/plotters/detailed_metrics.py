@@ -175,7 +175,9 @@ class DetailedMetricsPlotter:
                     # Mark best epoch
                     if 0 <= best_epoch < len(values) and np.isfinite(values[best_epoch]):
                         ax.scatter([best_epoch + 1], [values[best_epoch]],
-                                   s=100, marker='x', color='red', zorder=5)
+                                   s=100, marker='x', color='red', zorder=5,
+                                   label=f'Best Epoch {best_epoch + 1}')
+                        ax.legend(fontsize=9)
 
                 ax.set_xlabel("Epoch", fontsize=10)
                 ax.set_ylabel(metric_title, fontsize=10)
@@ -237,7 +239,9 @@ class DetailedMetricsPlotter:
 
                 if 0 <= best_epoch < len(values) and np.isfinite(values[best_epoch]):
                     ax.scatter([best_epoch + 1], [values[best_epoch]],
-                               s=100, marker='x', color='red', zorder=5)
+                               s=100, marker='x', color='red', zorder=5,
+                               label=f'Best Epoch {best_epoch + 1}')
+                    ax.legend(fontsize=9)
 
             ax.set_xlabel("Epoch", fontsize=10)
             ax.set_ylabel(label, fontsize=10)
@@ -309,7 +313,9 @@ class DetailedMetricsPlotter:
 
                     if 0 <= best_epoch < len(values) and np.isfinite(values[best_epoch]):
                         ax.scatter([best_epoch + 1], [values[best_epoch]],
-                                   s=100, marker='x', color='red', zorder=5)
+                                   s=100, marker='x', color='red', zorder=5,
+                                   label=f'Best Epoch {best_epoch + 1}')
+                        ax.legend(fontsize=9)
 
                 ax.set_xlabel("Epoch", fontsize=10)
                 ax.set_ylabel(metric_title, fontsize=10)

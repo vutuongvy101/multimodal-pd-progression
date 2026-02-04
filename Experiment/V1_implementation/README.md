@@ -1,343 +1,153 @@
 # V1: Multimodal Longitudinal Transformer for Parkinson's Disease
 
-A simplified, production-ready deep learning model for PD progression prediction using PPMI data.
+A Transformer-based deep learning model for predicting Parkinson's disease progression using PPMI longitudinal data.
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Why V1?](#why-v1)
-3. [Architecture](#architecture)
-4. [Quick Start](#quick-start)
-5. [Project Structure](#project-structure)
-6. [Data Pipeline](#data-pipeline)
-7. [Model Components](#model-components)
-8. [Training](#training)
-9. [Configuration](#configuration)
-10. [UPDRS Structure](#updrs-structure)
-11. [Testing](#testing)
-12. [Troubleshooting](#troubleshooting)
-13. [Next Steps](#next-steps)
+2. [Architecture](#architecture)
+3. [Data Pipeline](#data-pipeline)
+4. [Model Components](#model-components)
+5. [Training Process](#training-process)
+6. [Quick Start](#quick-start)
+7. [Configuration](#configuration)
+8. [Project Structure](#project-structure)
+9. [Testing](#testing)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Overview
 
 **V1** is a Transformer-based model that predicts Parkinson's disease progression by:
-- Fusing multimodal data (genetics, demographics, clinical assessments)
-- Learning longitudinal patterns across patient visits
-- Handling missing data explicitly
+- Fusing multimodal data (genetics, demographics, clinical assessments, medication)
+- Learning longitudinal patterns across irregular patient visits
+- Handling missing data explicitly with two-mask system
 - Predicting both next-visit outcomes and long-term progression slopes
 
 ### Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Longitudinal Fusion** | Transformer learns from sequences of visits |
-| **Multimodal** | Combines genetics + demographics + motor + non-motor + medication |
-| **Medication-Aware** | Explicit ON/OFF status and LEDD as features |
-| **Missingness Handling** | Built-in masks for each modality |
-| **Time-Aware** | Continuous time encoding (actual months, not indices) |
-| **Multi-Objective** | Predicts next-visit UPDRS totals (NP1RTOT, NP2PTOT, NP3TOT, NP4TOT) + patient-level progression slopes (all 4 UPDRS totals) |
+| **Longitudinal Fusion** | Transformer learns from sequences of visits with variable timing |
+| **Multimodal** | Combines static (genetics, demographics) + time-varying (motor, non-motor, medication, age) |
+| **Missingness Handling** | Two-mask system: input missingness (Mask A) and label availability (Mask B) |
+| **Time-Aware** | Continuous time encoding using actual months since baseline |
+| **Multi-Objective** | Predicts next-visit UPDRS totals (4 targets) + patient-level progression slopes (4 targets) |
+| **Feature Normalization** | Automatic z-score normalization per modality (fitted on training data only) |
 
----
+### Prediction Targets
 
-## Why V1?
+**Next-Visit Predictions** (per visit):
+- `NP1RTOT`: Non-motor experiences of daily living (0-52)
+- `NP2PTOT`: Motor activities of daily living (0-52)
+- `NP3TOT`: Motor examination (0-132) - **primary outcome**
+- `NP4TOT`: Motor complications (0-24)
 
-V1 is a **strategic simplification** of a more complex architecture. The goal is to establish a working baseline before adding complexity.
-
-### Comparison with Full Model
-
-| Component | Complex Model | V1 (Simplified) | Benefit |
-|-----------|--------------|-----------------|---------|
-| Latent state | Variational (μ, σ) + KL | Direct embeddings | Easier training |
-| Medication | Mixed-effects decomposition | Explicit features | Clear interpretation |
-| Loss function | ELBO + survival + MSE | 2× MSE only | Simpler debugging |
-| Training | VAE + multiple heads | Standard supervised | Faster convergence |
-
-### What V1 Achieves
-
-✅ Learns longitudinal patterns from irregular visits  
-✅ Produces medication-aware predictions  
-✅ Handles systematic missingness in clinical data  
-✅ Provides a validated baseline for comparison  
-
-### What V1 Defers (for V2+)
-
-❌ Latent disease state separation from symptoms  
-❌ Individual medication responsiveness modeling  
-❌ Time-to-event / survival predictions  
-❌ Uncertainty quantification  
+**Slope Predictions** (per patient):
+- `NP1RTOT_slope`: Non-motor progression rate (points/month)
+- `NP2PTOT_slope`: Motor ADL progression rate (points/month)
+- `NP3TOT_slope`: Motor examination progression rate (points/month) - **primary**
+- `NP4TOT_slope`: Complications progression rate (points/month)
 
 ---
 
 ## Architecture
 
+### High-Level Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     VISIT INDEX (master timeline)               │
-│  PATNO | EVENT_ID | months_since_baseline | visit_order | Δt    │
-│  Defines WHEN visits happen - independent of any modality       │
+│                    INPUT DATA (per patient)                    │
+├─────────────────────────────────────────────────────────────────┤
+│ Static: [batch, n_static] + mask                               │
+│ Motor: [batch, seq_len, n_motor] + mask                        │
+│ Non-motor: [batch, seq_len, n_nonmotor] + mask                 │
+│ Medication: [batch, seq_len, n_med] + mask                      │
+│ Age at visit: [batch, seq_len, n_age] + mask                   │
+│ Time: [batch, seq_len] (months since baseline)                  │
 └─────────────────────────────────────────────────────────────────┘
                               │
-         ┌────────────────────┼────────────────────┐
-         ▼                    ▼                    ▼
-┌─────────────────┐    ┌─────────────────┐   ┌─────────────────┐
-│  STATIC DATA    │    │  TIME-VARYING   │   │  MEDICATION     │
-│  • Genetics     │    │  (per visit)    │   │  CONTEXT        │
-│  • Demographics │    │  • Part I-IV    │   │  • LEDD         │
-│                 │    │  • MoCA, ESS    │   │  • ON/OFF       │
-└─────────────────┘    └─────────────────┘   └─────────────────┘
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     MODALITY EMBEDDINGS (per modality)           │
-│  Each modality: MLP([values, input_missingness_mask]) → embedding  │
-│  Enabled modalities configurable: ['static','motor','nonmotor',  │
-│                                    'medication']                 │
-└──────────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              MODALITY EMBEDDINGS (per enabled modality)        │
+│  Static: MLP([values, mask]) → [batch, d_model]                │
+│  Motor: MLP([values, mask]) → [batch, seq_len, d_model]        │
+│  Non-motor: MLP([values, mask]) → [batch, seq_len, d_model]    │
+│  Medication: MLP([values, mask]) → [batch, seq_len, d_model]   │
+│  Age: MLP([values, mask]) → [batch, seq_len, d_model]           │
+└─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     VISIT TOKEN FORMATION                        │
-│  v_t = Concat(enabled modality embeddings)                       │
-│  v_t = Project(v_t) + SinusoidalTimeEncoding(months, delta_t)    │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    VISIT TOKEN FORMATION                       │
+│  1. Concatenate enabled modality embeddings                     │
+│  2. Project to d_model: Linear(d_model × n_modalities → d_model)│
+│  3. Add time encoding: SinusoidalTimeEncoding(months)          │
+│  Output: [batch, seq_len, d_model]                             │
+└─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                   TRANSFORMER ENCODER                            │
-│  4 layers, 8 heads, d_model=256                                  │
-│  Attention mask for variable-length sequences                    │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                  TRANSFORMER ENCODER                            │
+│  - Layers: 4 (configurable)                                    │
+│  - Heads: 8 (configurable)                                    │
+│  - d_model: 256 (configurable)                                 │
+│  - Pre-LayerNorm architecture                                 │
+│  - Attention mask for variable-length sequences               │
+│  Output: [batch, seq_len, d_model]                             │
+└─────────────────────────────────────────────────────────────────┘
                               │
               ┌───────────────┴───────────────┐
               ▼                               ▼
 ┌─────────────────────────┐     ┌─────────────────────────┐
 │   NEXT-VISIT HEAD       │     │   SLOPE HEAD            │
 │   Input: h_t            │     │   Input: pool(H)        │
-│   Output: UPDRS totals  │     │   Output: slopes        │
-│   Loss: MSE with        │     │   Loss: MSE             │
-│   LABEL AVAILABILITY    │     │                         │
-│   MASK per target       │     │                         │
+│   MLP: [d_model → ... → 4]  │     │   Pooling: mean (masked)  │
+│   Output: [batch, seq_len, 4]│     │   MLP: [d_model → ... → 4]│
+│   Predicts: UPDRS totals│     │   Output: [batch, 4]    │
+│   at next visit         │     │   Predicts: slopes     │
 └─────────────────────────┘     └─────────────────────────┘
-
-Total Loss = L_next_visit + λ × L_slope  (λ = 0.2)
 ```
 
 ### Two-Mask System
 
-The model uses **two different types of masks** to handle PPMI-style irregular data:
+The model uses **two separate mask types** to handle PPMI-style irregular data:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TWO SEPARATE MASKS                           │
-├─────────────────────────────────────────────────────────────────┤
-│  A) INPUT MISSINGNESS MASKS (per modality)                      │
-│     • "Is feature X observed at visit t?"                       │
-│     • Shape: [batch, seq_len, n_features] per modality          │
-│     • Used by: modality embedding MLPs                          │
-│     • 1 = missing, 0 = present                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  B) LABEL AVAILABILITY MASKS (per target)                       │
-│     • "Does visit t+1 have a valid UPDRS total for this task?"  │
-│     • Shape: [batch, seq_len, n_targets]                        │
-│     • Used by: loss computation only                            │
-│     • 1 = label present, 0 = label missing                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Mask A: Input Missingness Masks** (per modality)
+- **Purpose**: Indicate which features are observed vs. missing at each visit
+- **Shape**: `[batch, seq_len, n_features]` (or `[batch, n_features]` for static)
+- **Values**: `1 = missing`, `0 = present`
+- **Usage**: Concatenated with feature values before embedding
+- **Location**: Modality embedding MLPs
 
-**Key insight**: You do NOT filter timelines based on missing modalities. You keep all visits and mask out loss contributions where labels are missing.
+**Mask B: Label Availability Masks** (per target)
+- **Purpose**: Indicate which target labels are available for loss computation
+- **Shape**: `[batch, seq_len, n_targets]` for next-visit targets
+- **Values**: `1 = label present`, `0 = label missing`
+- **Usage**: Applied during loss computation only
+- **Location**: Loss function (masks out invalid predictions)
 
-**Example**:
-- If your task is "predict next-visit motor" but motor at V2 is missing:
-  - The V1→V2 prediction should NOT contribute to motor loss
-  - But that same V1→V2 can still contribute to medication-related predictions
-  - You mask the loss, not the timeline
+**Key Insight**: The timeline includes ALL visits (even if some modalities are missing). Missing modalities are masked at the input level (Mask A), while missing labels are masked at the loss level (Mask B).
 
-### Modality Selection (Ablation Studies)
+### Modality Selection
 
-Modalities can be enabled/disabled via config for ablation experiments:
+Modalities can be enabled/disabled via configuration for ablation studies:
 
 ```python
-# Train with all modalities (default)
-config.model.enabled_modalities = ['static', 'motor', 'nonmotor', 'medication']
+# All modalities (default)
+config.model.enabled_modalities = ['static', 'motor', 'nonmotor', 'medication', 'age_at_visit']
 
-# Train with only static + motor (ablation)
+# Ablation: static + motor only
 config.model.enabled_modalities = ['static', 'motor']
 
-# Train without medication context
-config.model.enabled_modalities = ['static', 'motor', 'nonmotor']
+# Ablation: without medication context
+config.model.enabled_modalities = ['static', 'motor', 'nonmotor', 'age_at_visit']
 ```
 
----
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.8+
-- PyTorch 1.12+
-- PPMI data access
-
-### 1. Activate Virtual Environment
-
-You can use either **conda** or **pyenv (virtualenv)**.
-
-#### Option A: conda
-
-```bash
-conda activate sri_hri
-```
-
-#### Option B: pyenv (virtualenv)
-
-```bash
-# Example (adjust python version as needed)
-pyenv install -s 3.10.13
-
-# Create and activate a dedicated virtualenv for this project
-pyenv virtualenv 3.10.13 pd-v1
-pyenv activate pd-v1
-
-python -m pip install --upgrade pip
-```
-
-### 2. Install Dependencies
-
-```bash
-# From git/pdS22025/Experiment/V1_implementation
-python -m pip install -r ../../requirements.txt
-```
-
-### 3. Install Package in Editable Mode (Optional but Recommended)
-
-Install the V1 package in editable mode so that imports work properly and IDE support (like IntelliJ) can recognize the package structure:
-
-```bash
-# Make sure you're in the V1_implementation directory
-cd V1_implementation
-
-# Install in editable mode (use the same virtual environment)
-pip install -e .
-```
-
-This will install the package in development mode, which means:
-- Changes to the code are immediately reflected without reinstalling
-- IDEs like IntelliJ/PyCharm can better resolve imports (especially `from training.config import ...`)
-- The package is only installed in your current virtual environment
-
-**Note**: If you're using IntelliJ/PyCharm, make sure your IDE is configured to use the Python interpreter from your active virtual environment (Settings → Project → Python Interpreter).
-
-### 4. Configure Data Paths
-
-Edit `training/config.py` to point to your PPMI data:
-
-```python
-@dataclass
-class DataConfig:
-    # Path configuration options:
-    # 1. Use absolute paths (recommended)
-    base_dir: str = "/full/path/to/ppmi_pd"
-    genetic_consensus: str = "/full/path/to/genetics/iu_genetic_consensus_*.csv"
-    
-    # 2. Use paths relative to base_dir (without ../)
-    base_dir: str = "../../ppmi_pd"
-    participant_status: str = "Participant_Status_14Dec2025.csv"
-    
-    # 3. Use paths relative to where script is run (paths starting with ../)
-    # These are resolved relative to current working directory
-    genetic_consensus: str = "../genetics/iu_genetic_consensus_*.csv"
-```
-
-**Path Resolution Rules:**
-- Paths starting with `/` are treated as absolute paths
-- Paths starting with `../` are resolved relative to the **current working directory**
-- Other paths are resolved relative to `base_dir`
-
-**Recommended**: Use absolute paths or update paths to be relative to `base_dir` (without `../` prefix).
-
-### 5. Test Components
-
-Each components have according test files. Run test to understand component behavior.
-
-```bash
-cd V1_implementation
-
-# Test configuration
-python training/config.py
-
-# Test model (requires PyTorch)
-python models/v1_model.py
-```
-
-### 6. Train Model
-
-**Recommended: Use the unified CLI entrypoint:**
-```bash
-# Default: 5-fold cross-validation
-python -m training.main
-
-# See Training section below for full documentation
-```
-
----
-
-## Project Structure
-
-```
-V1_implementation/
-├── README.md                    # This file
-├── setup.py                     # Package setup (for pip install -e .)
-├── pyproject.toml               # Python project configuration
-├── __init__.py                  # Package initialization
-│
-├── training/                   # Training & configuration
-│   ├── config.py               # All hyperparameters & paths
-│   ├── main.py                 # Unified CLI entrypoint (RECOMMENDED)
-│   ├── train.py                # Training loop (V1Trainer class)
-│   ├── kfold_trainer.py        # K-fold CV trainer class
-│   ├── multi_modal_trainer.py  # Multi-modal ablation trainer
-│   └── __init__.py
-│
-├── models/                      # Model architecture
-│   ├── embeddings.py           # Modality embeddings + time encoding
-│   ├── heads.py                # Prediction heads
-│   ├── v1_model.py             # Complete V1 Transformer
-│   └── __init__.py
-│
-├── data/                        # Data loading & processing
-│   ├── base_loader.py          # Base classes
-│   ├── data_integrator.py      # Combines all loaders + feature vector creation
-│   ├── dataset.py              # PyTorch Dataset & DataLoader
-│   ├── __init__.py
-│   └── loaders/                # Individual data loaders
-│       ├── genetics_loader.py
-│       ├── demographics_loader.py
-│       ├── updrs_loader.py
-│       ├── non_motor_loader.py
-│       ├── medication_loader.py
-│       └── __init__.py
-│
-└── tests/                       # Test suite
-    ├── __init__.py             # Test package initialization
-    ├── conftest.py             # Pytest fixtures and shared configuration
-    ├── test_loaders.py         # Tests for data loaders
-    ├── test_models.py          # Tests for model components
-    ├── test_training.py        # Tests for training configuration
-    └── test_data.py            # Tests for data processing pipeline
-```
-
-### Key Files
-
-- **Configuration**: `training/config.py` - All hyperparameters, paths, and settings
-- **Model**: `models/v1_model.py` - Complete V1 Transformer architecture
-- **Data Pipeline**: `data/data_integrator.py` - Combines all data loaders (includes feature scaling)
-- **Training**: `training/train.py` - Training loop and model training
-- **K-Fold Training**: `training/kfold_trainer.py` - K-fold cross-validation trainer
-- **Dataset**: `data/dataset.py` - PyTorch Dataset & DataLoader utilities (includes k-fold dataloaders)
-- **Tests**: `tests/` - Comprehensive test suite for all components
+Only enabled modalities are embedded and contribute to visit tokens.
 
 ---
 
@@ -345,255 +155,229 @@ V1_implementation/
 
 ### Overview
 
-The data pipeline uses a **modular loader architecture** with a **master visit index** that defines the timeline independently of any modality. All loaders inherit from base classes that ensure consistent data processing.
+The data pipeline transforms raw PPMI CSV files into training-ready PyTorch DataLoaders through these stages:
 
-**Key Design Principles:**
-- ✅ **Visit Index as master timeline**: Timeline defined once, not implicitly by any modality
-- ✅ **Standardized participant filtering**: All loaders use the same valid participant list
-- ✅ **Type-based base classes**: `StaticDataLoader` (patient-level) vs `LongitudinalDataLoader` (visit-level)
-- ✅ **Explicit modality alignment**: Each modality is aligned TO the visit_index
-- ✅ **Two-mask system**: Input missingness (A) and label availability (B) are separate
+1. **Data Loading**: Individual loaders extract features from CSV files
+2. **Visit Index Building**: Master timeline created independently of modalities
+3. **Data Integration**: Merge static and longitudinal data, compute slopes
+4. **Feature Engineering**: Create missingness masks, normalize features
+5. **Dataset Creation**: Convert to PyTorch Dataset format
+6. **DataLoader Creation**: Batch data with proper padding and masking
 
-### Visit Index (Master Timeline)
+### Stage 1: Data Loading
 
-The `VisitIndexBuilder` creates the master timeline that all modalities align to:
+Individual loaders extract domain-specific data from PPMI CSV files:
+
+**Static Loaders** (patient-level, one row per patient):
+- `GeneticsLoader`: Genetic variants, PRS scores, principal components
+- `DemographicsLoader`: Demographics, socioeconomic status, family history
+
+**Longitudinal Loaders** (visit-level, multiple rows per patient):
+- `UPDRSLoader`: UPDRS Parts I-IV scores, supplementary motor assessments
+- `NonMotorAssessmentsLoader`: MoCA, ESS, SCOPA-AUT, Schwab & England
+- `MedicationLoader`: LEDD, medication history, ON/OFF status
+- `AgeAtVisitLoader`: Age at each visit (varies by visit, not static)
+
+**Base Classes**:
+- `StaticDataLoader`: Base class for patient-level data (merge key: `['PATNO']`)
+- `LongitudinalDataLoader`: Base class for visit-level data (merge key: `['PATNO', 'EVENT_ID']`)
+
+All loaders:
+- Filter to valid participants (using `participant_status.csv`)
+- Handle missing values gracefully
+- Return DataFrames with standardized columns
+
+### Stage 2: Visit Index Building
+
+The `VisitIndexBuilder` creates a **master timeline** that defines when visits occur, independent of any modality:
 
 ```python
-from data.visit_index_builder import VisitIndexBuilder
-
-builder = VisitIndexBuilder(config)
-visit_index = builder.build_from_sources(
-    source_dfs=[updrs_df, non_motor_df, medication_df],
+visit_index = VisitIndexBuilder.build_from_sources(
+    source_dfs=[updrs_df, non_motor_df, medication_df, age_at_visit_df],
     valid_patnos=valid_patient_list
 )
 ```
 
-**visit_index columns:**
+**visit_index columns**:
+- `PATNO`: Patient ID
+- `EVENT_ID`: Visit code (BL, V01, V02, R01, U01, etc.)
+- `visit_date`: Actual date (from INFODT)
+- `months_since_baseline`: Continuous time since baseline
+- `visit_order`: Integer (0, 1, 2, ...) within patient
+- `delta_months`: Time gap from previous visit
 
-| Column | Description |
-|--------|-------------|
-| `PATNO` | Patient ID |
-| `EVENT_ID` | Visit code (BL, V01, V02, R01, U01, etc.) |
-| `visit_date` | Actual date (from INFODT) |
-| `months_since_baseline` | Continuous time since baseline |
-| `visit_order` | Integer (0, 1, 2, ...) within patient |
-| `delta_months` | Time gap from previous visit |
+**Key Insight**: The visit_index is the **UNION** of all visit anchors across all sources. If a patient has a medication visit but no UPDRS that day, the visit still exists in the timeline. Missing modality data at a visit = mask it, don't filter the timeline.
 
+**Patient Filtering**: Patients with fewer than `min_visits` (default: 2) are filtered out at this stage.
 
-**Key insight**: The visit_index is the UNION of all visit anchors across all sources, then filtered and sorted. This means:
-- If a patient has a medication visit but no UPDRS that day, the visit still exists
-- Missing modality data at a visit = mask it, don't filter the timeline
+### Stage 3: Data Integration
 
-### Base Loader Classes
-
-All loaders inherit from base classes defined in `data/base_loader.py`:
-
-#### `StaticDataLoader` (Patient-Level Data)
-- **Merge key**: `['PATNO']`
-- **Use case**: One row per patient (genetics, demographics)
-- **Examples**: `GeneticsLoader`, `DemographicsLoader`
-
-#### `LongitudinalDataLoader` (Visit-Level Data)
-- **Merge key**: `['PATNO', 'EVENT_ID']`
-- **Use case**: Multiple rows per patient (one per visit)
-- **Helper methods**:
-  - `compute_time_since_baseline()`: Computes `months_since_baseline` from dates or `EVENT_ID`
-  - `filter_by_valid_participants()`: Filters visits to only valid participants
-- **Examples**: `UPDRSLoader`, `NonMotorAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`
-
-#### Standardized Participant Filtering
-
-All loaders use `participant_status` as the source of truth for valid participants:
+The `DataIntegrator` orchestrates the complete pipeline:
 
 ```python
-# Base class methods available to all loaders:
-self._load_and_filter_participants(config)  # Load and filter participant_status
-```
-
-**Filtering criteria**:
-- ✅ Valid enrollment status: `Complete`, `Enrolled`, `Withdraw Deceased`, `Withdrew`
-- ✅ Valid cohorts: `Healthy Control`, `Parkinson's Disease`, `Prodromal` (excludes SWEDD)
-- ✅ Non-null `ENROLL_DATE`
-
-### Individual Loaders
-
-| Loader | Type | Description | Output Columns |
-|--------|------|-------------|----------------|
-| **DemographicsLoader** | Static | Demographics, socioeconomic, family history | `PATNO` + demographics features |
-| **GeneticsLoader** | Static | Genetic consensus, PRS scores, principal components | `PATNO` + genetics features |
-| **UPDRSLoader** | Longitudinal | UPDRS Parts I-IV (motor/non-motor assessments) | `PATNO`, `EVENT_ID`, `months_since_baseline` + UPDRS features |
-| **NonMotorAssessmentsLoader** | Longitudinal | MoCA, ESS, SCOPA-AUT, Schwab & England | `PATNO`, `EVENT_ID`, `months_since_baseline` + non-motor scores |
-| **MedicationLoader** | Longitudinal | LEDD, medication history, ON/OFF status | `PATNO`, `EVENT_ID`, `months_since_baseline` + medication features |
-| **AgeAtVisitLoader** | Longitudinal | Age at each visit (varies by visit, not static) | `PATNO`, `EVENT_ID`, `months_since_baseline` + `AGE_AT_VISIT` |
-
-#### Loader Pipeline Steps
-
-**StaticDataLoader pattern** (`DemographicsLoader`, `GeneticsLoader`):
-```python
-1. Load and filter participant_status (using _load_and_filter_participants)
-2. Load domain-specific data files
-3. Merge on PATNO
-4. Return: DataFrame with PATNO + features
-```
-
-**LongitudinalDataLoader pattern** (`UPDRSLoader`, `NonMotorAssessmentsLoader`, `MedicationLoader`, `AgeAtVisitLoader`):
-```python
-1. Load domain-specific data files
-2. Filter to valid participants (using filter_by_valid_participants)
-3. Compute months_since_baseline (using compute_time_since_baseline) if INFODT available
-4. Return: DataFrame with PATNO, EVENT_ID, months_since_baseline + features
-```
-
-### Data Integration Pipeline
-
-The `DataIntegrator` (`data/data_integrator.py`) orchestrates the complete pipeline:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ STEP 1: Load All Data                                            │
-├─────────────────────────────────────────────────────────────────┤
-│ Static Data:                                                     │
-│   demographics_df = demographics_loader.load()                  │
-│   genetics_df = genetics_loader.load()                           │
-│   → Merge on PATNO → static_df                                   │
-│                                                                  │
-│ Longitudinal Data:                                               │
-│   updrs_df = updrs_loader.load()                                 │
-│   non_motor_df = non_motor_loader.load()  (optional)              │
-│   medication_df = medication_loader.load() (optional)           │
-│   age_at_visit_df = age_at_visit_loader.load() (optional)       │
-│   → Merge on [PATNO, EVENT_ID] → longitudinal_df                │
-└─────────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ STEP 2: Compute Progression Slopes                               │
-├─────────────────────────────────────────────────────────────────┤
-│ For each patient with ≥min_visits visits:                        │
-│   - Fit linear regression: score ~ months_since_baseline        │
-│   - Fit linear regression: score ~ months_since_baseline        │
-│   - Compute slope for NP1RTOT, NP2PTOT, NP3TOT, NP4TOT           │
-│   - Store all slopes per patient (slopes_dict)                   │
-│ → slopes_df (one row per patient with all slope columns)         │
-│                                                                   │
-│ Note: Model predicts ALL 4 slopes per patient (one per UPDRS total)│
-│       Slopes are computed for all totals during data preparation  │
-└─────────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ STEP 3: Filter to Complete Cases                                 │
-├─────────────────────────────────────────────────────────────────┤
-│ Keep only patients present in BOTH:                              │
-│   - static_df AND longitudinal_df                                │
-└─────────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ OUTPUT (prepare_final_dataset): Dictionary with                  │
-├─────────────────────────────────────────────────────────────────┤
-│ - 'static': DataFrame (patient-level features)                  │
-│ - 'longitudinal': DataFrame (visit-level features)              │
-│ - 'slopes': DataFrame (patient-level progression slopes for all totals)        │
-│   Columns: PATNO, NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope   │
-│ - 'metadata': Summary statistics                                │
-└─────────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ STEP 4: Create Feature Vectors (REQUIRED)                       │
-│ (create_feature_vectors() - creates missing value masks)        │
-├─────────────────────────────────────────────────────────────────┤
-│ Converts DataFrame format to dataset format with:                │
-│   - Missing value masks (1=missing, 0=present)                  │
-│   - Per-patient static data: {'values': array, 'mask': array}   │
-│   - Per-patient longitudinal data: List of visit dicts          │
-│   - Slopes dictionary: {PATNO: Dict[str, float]}                │
-│     Keys: 'NP1RTOT_slope', 'NP2PTOT_slope', 'NP3TOT_slope', 'NP4TOT_slope'│
-│     Model predicts all 4 slopes (one per UPDRS total)          │
-│                                                                  │
-│ This format is ready for PPMILongitudinalDataset                │
-│ Note: Called automatically by create_dataloaders() if needed    │
-└─────────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ STEP 5: Create PyTorch Datasets & DataLoaders                   │
-│ (create_dataloaders() - handles train/val/test split)           │
-├─────────────────────────────────────────────────────────────────┤
-│ 1. Automatically calls create_feature_vectors() if needed       │
-│ 2. Splits patients into train/val/test                          │
-│ 3. Creates PPMILongitudinalDataset for each split               │
-│ 4. Returns DataLoaders ready for training                       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Key Methods:**
-- `prepare_final_dataset()` - Main pipeline: loads data, computes slopes, returns DataFrames
-- `create_feature_vectors()` - Converts DataFrames to dataset format with missing value handling (REQUIRED for training)
-- `create_missingness_masks()` - Creates explicit masks for missing values (used internally)
-- `create_dataloaders()` - Creates train/val/test DataLoaders (automatically calls `create_feature_vectors()` if needed)
-- `fit_scalers()` - Fit feature scalers on training data (for normalization)
-
-### Feature Scaling/Normalization
-
-The data pipeline includes **automatic feature normalization** using z-score (standardization) to handle features with different scales (e.g., UPDRS scores 0-132 vs. percentages 0-1 vs. age 30-80).
-
-**How it works:**
-- **FeatureScaler** class performs z-score normalization: `normalized = (value - mean) / std`
-- Separate scalers are used for each modality: static, motor, UPDRS supplementary, non-motor, medication
-- Scalers are **fitted on training data only** to prevent data leakage
-- Missing values are handled correctly: only observed values are used for computing statistics, and missing values remain as 0 (with mask=1)
-
-**Usage:**
-```python
-from data.data_integrator import DataIntegrator
-
-# Enable normalization (default: True)
 integrator = DataIntegrator(config, normalize_features=True)
-
-# Prepare data (scalers will be fitted automatically on training split)
 prepared_data = integrator.prepare_final_dataset()
-train_loader, val_loader, test_loader = integrator.create_dataloaders(prepared_data, config)
-
-# For k-fold CV, scalers are fitted per fold on training fold data only
-# This is handled automatically by create_kfold_dataloaders()
 ```
 
-**Disabling normalization:**
+**Steps**:
+1. **Load all data**: Call each loader's `load()` method
+2. **Merge static data**: Merge genetics + demographics on `PATNO`
+3. **Merge longitudinal data**: Merge all visit-level data on `['PATNO', 'EVENT_ID']`
+4. **Compute progression slopes**: For each patient with ≥3 visits, fit linear regression:
+   - `score ~ months_since_baseline` for each UPDRS total (NP1RTOT, NP2PTOT, NP3TOT, NP4TOT)
+   - Store slopes in `slopes_df` (one row per patient)
+5. **Filter to complete cases**: Keep only patients present in both static and longitudinal data
+
+**Progression Slope Computation Details**:
+- **Method**: Ordinary Least Squares (OLS) using `scipy.stats.linregress`
+- **Visits included**: 
+  - All visits with valid `months_since_baseline` (non-NaN)
+  - For each UPDRS total, only visits with non-NaN scores are included
+  - Minimum visits required: `min_visits_for_slope = 3` (configurable)
+  - Each total is computed independently (patient may have slope for some totals but not others)
+- **Missing data handling**: 
+  - Missing values are dropped per target using `dropna()` on the specific UPDRS total column
+  - If a patient has valid scores at visits [0, 1, 3, 5] but missing at visit 2, only [0, 1, 3, 5] are used
+- **Time units**: Months (continuous `months_since_baseline`)
+- **Clipping/Standardization**: 
+  - No clipping applied to slopes
+  - No standardization applied to slopes
+  - Slopes are used as-is from regression (can be negative, positive, or zero)
+  - Units: points per month
+- **Validation**: 
+  - Skips computation if all visits are at the same time point (std(time) == 0)
+  - Stores correlation coefficient (`r`) and p-value (`p`) for each slope
+
+**Output**: Dictionary with:
+- `'static'`: DataFrame (patient-level features)
+- `'longitudinal'`: DataFrame (visit-level features)
+- `'slopes'`: DataFrame (patient-level slopes: PATNO, NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope)
+- `'metadata'`: Summary statistics
+
+### Stage 4: Feature Engineering
+
+The `FeatureEngineer` creates missingness masks and normalizes features:
+
 ```python
-# If you want raw feature values (not recommended for most cases)
-integrator = DataIntegrator(config, normalize_features=False)
+feature_vectors = integrator.create_feature_vectors(prepared_data)
 ```
 
-**Why normalize?**
-- Features have very different scales (UPDRS scores: 0-132, LEDD: 0-2000, age: 30-90, percentages: 0-1)
+**Steps**:
+1. **Create missingness masks** (Mask A):
+   - For each feature, `mask = 1` if value is NaN, `mask = 0` if present
+   - Missing values are set to `0.0` (mask indicates missingness)
+2. **Normalize features** (if `normalize_features=True`):
+   - Z-score normalization: `normalized = (value - mean) / std`
+   - Separate scalers per modality: static, motor, UPDRS supplementary, non-motor, medication, age_at_visit
+   - **Critical**: Scalers are fitted on training data only (prevents data leakage)
+3. **Structure data per-patient**:
+   - Static: `{PATNO: {'values': array, 'mask': array}}`
+   - Longitudinal: `{PATNO: [visit_dict_1, visit_dict_2, ...]}`
+
+**Visit Dictionary Structure** (per visit):
+```python
+{
+    'motor_values': np.ndarray,      # [n_motor_features]
+    'motor_mask': np.ndarray,         # [n_motor_features], 1=missing
+    'nonmotor_values': np.ndarray,    # [n_nonmotor_features]
+    'nonmotor_mask': np.ndarray,      # [n_nonmotor_features], 1=missing
+    'med_values': np.ndarray,         # [n_med_features]
+    'med_mask': np.ndarray,           # [n_med_features], 1=missing
+    'age_at_visit_values': np.ndarray, # [n_age_features]
+    'age_at_visit_mask': np.ndarray,   # [n_age_features], 1=missing
+    'time_months': float,              # Months since baseline
+    'delta_months': float,             # Time gap from previous visit
+    'visit_order': int,                # Visit index (0, 1, 2, ...)
+    'updrs_totals': np.ndarray         # [4] - NP1RTOT, NP2PTOT, NP3TOT, NP4TOT (NaN if missing)
+}
+```
+
+**Slopes Dictionary Structure**:
+```python
+{
+    PATNO: {
+        'NP1RTOT_slope': float,   # or NaN if not available
+        'NP2PTOT_slope': float,   # or NaN if not available
+        'NP3TOT_slope': float,    # or NaN if not available
+        'NP4TOT_slope': float     # or NaN if not available
+    }
+}
+```
+
+### Stage 5: Dataset Creation
+
+The `PPMILongitudinalDataset` converts feature vectors to PyTorch tensors:
+
+```python
+dataset = PPMILongitudinalDataset(
+    patient_ids=patient_list,
+    static_data=static_data,      # Dict[PATNO, {'values': array, 'mask': array}]
+    longitudinal_data=longitudinal_data,  # Dict[PATNO, List[visit_dict]]
+    slopes=slopes,                # Dict[PATNO, Dict[str, float]]
+    max_seq_len=20
+)
+```
+
+**Dataset `__getitem__` returns**:
+- `static_values`: `[n_static]` tensor
+- `static_mask`: `[n_static]` tensor (1=missing)
+- `motor_values`: `[seq_len, n_motor]` tensor
+- `motor_mask`: `[seq_len, n_motor]` tensor (1=missing)
+- `nonmotor_values`: `[seq_len, n_nonmotor]` tensor
+- `nonmotor_mask`: `[seq_len, n_nonmotor]` tensor (1=missing)
+- `med_values`: `[seq_len, n_med]` tensor
+- `med_mask`: `[seq_len, n_med]` tensor (1=missing)
+- `age_at_visit_values`: `[seq_len, n_age]` tensor
+- `age_at_visit_mask`: `[seq_len, n_age]` tensor (1=missing)
+- `time_months`: `[seq_len]` tensor
+- `next_visit_targets`: `[seq_len, 4]` tensor (UPDRS totals, NaN filled with 0)
+- `next_visit_label_mask`: `[seq_len, 4]` tensor (1=label present, 0=missing) - **Mask B**
+- `slope_targets`: `[4]` tensor (slopes, NaN filled with 0)
+- `seq_len`: int (actual sequence length before padding)
+
+### Stage 6: DataLoader Creation
+
+The `collate_fn` handles variable-length sequences:
+
+```python
+train_loader, val_loader, test_loader = create_dataloaders(
+    prepared_data, config,
+    train_ratio=0.7, val_ratio=0.15, test_ratio=0.15
+)
+```
+
+**Collate Function**:
+1. **Pad sequences** to max length in batch
+2. **Create attention_mask**: `[batch, max_seq_len]`, `1 = valid visit`, `0 = padding`
+3. **Stack all tensors** with proper padding
+
+**DataLoader Output** (per batch):
+- All input tensors: `[batch, max_seq_len, n_features]` (or `[batch, n_features]` for static)
+- `attention_mask`: `[batch, max_seq_len]` (1=valid, 0=padding)
+- `next_visit_targets`: `[batch, max_seq_len, 4]`
+- `next_visit_label_mask`: `[batch, max_seq_len, 4]` (1=present, 0=missing) - **Mask B**
+- `slope_targets`: `[batch, 4]`
+
+### Feature Normalization Details
+
+**Why Normalize?**
+- Features have very different scales:
+  - UPDRS scores: 0-132
+  - LEDD: 0-2000
+  - Age: 30-90
+  - Percentages: 0-1
 - Neural networks train better with normalized features (stable gradients, faster convergence)
-- Without normalization, large-scale features can dominate learning
 
-### Running the Data Pipeline
+**How It Works**:
+1. **Separate scalers per modality**: static, motor, UPDRS supplementary, non-motor, medication, age_at_visit
+2. **Fitted on training data only**: Prevents data leakage
+3. **Z-score normalization**: `normalized = (value - mean) / std`
+4. **Missing values**: Excluded from mean/std computation, remain as 0 (with mask=1)
 
-**Test individual loaders:**
-```bash
-cd data/loaders
-python genetics_loader.py      # Test genetics loader
-python updrs_loader.py         # Test UPDRS loader
-python demographics_loader.py  # Test demographics loader
-```
-
-**Run full integration:**
-```bash
-cd data
-python data_integrator.py
-```
-
-**Output files:**
-```
-data/processed/
-├── static_data.csv         # Patient-level features (PATNO + genetics + demographics)
-├── longitudinal_data.csv   # Visit-level features (PATNO, EVENT_ID, months_since_baseline + all assessments)
-└── slopes_data.csv         # Progression slopes (PATNO + NP1RTOT_slope, NP2PTOT_slope, etc.)
-```
+**For K-Fold CV**:
+- Scalers are fitted per fold on training fold data only
+- Applied to validation fold (and test set)
+- Handled automatically by `create_kfold_dataloaders()`
 
 ### Complete Pipeline Flow
 
@@ -601,26 +385,35 @@ data/processed/
 Raw PPMI CSV Files
     │
     ├─→ participant_status.csv
-    │       └─→ [STANDARDIZED FILTERING] ──→ Valid PATNOs
+    │       └─→ [Filter valid participants] ──→ Valid PATNOs
     │                                              │
     ├─→ DemographicsLoader ────────────────────────┤
-    │   └─→ static_df (PATNO + demographics)       │
+    │   └─→ demographics_df (PATNO + demographics) │
     │                                              │
     ├─→ GeneticsLoader ────────────────────────────└─→ static_df (merged)
     │   └─→ genetics_df (PATNO + genetics)       
-    │                                            
     │                                            
     ├─→ UPDRSLoader ────────────────────────────┐
     │   └─→ updrs_df (PATNO, EVENT_ID, UPDRS)   │
     │                                           │
     ├─→ NonMotorAssessmentsLoader ──────────────┤
-    │   └─→ non_motor_df (PATNO, EVENT_ID, ...)  │
+    │   └─→ non_motor_df (PATNO, EVENT_ID, ...) │
     │                                           │
-    ├─→ MedicationLoader ───────────────────────┤
+    ├─→ MedicationLoader ────────────────────────┤
     │   └─→ medication_df (PATNO, EVENT_ID, ...)├─→ longitudinal_df (merged)
     │                                           │
-    └─→ AgeAtVisitLoader ───────────────────────┘
+    └─→ AgeAtVisitLoader ────────────────────────┘
         └─→ age_at_visit_df (PATNO, EVENT_ID, AGE_AT_VISIT)
+                        │
+                        ▼
+        ┌───────────────────────────────┐
+        │   VisitIndexBuilder            │
+        │   build_from_sources()         │
+        ├───────────────────────────────┤
+        │ 1. Union all visit anchors    │
+        │ 2. Compute months_since_baseline│
+        │ 3. Filter by min_visits       │
+        └───────────────────────────────┘
                         │
                         ▼
         ┌───────────────────────────────┐
@@ -636,12 +429,21 @@ Raw PPMI CSV Files
                         ▼
         ┌───────────────────────────────┐
         │   DataIntegrator              │
-        │   create_feature_vectors()    │
-        │   (REQUIRED for training)     │
+        │   fit_scalers()               │
+        │   (on training data only)     │
         ├───────────────────────────────┤
-        │ - Create missingness masks    │
-        │ - Convert to dataset format   │
-        │ - Per-patient data structure  │
+        │ Fit z-score scalers per      │
+        │ modality on training split   │
+        └───────────────────────────────┘
+                        │
+                        ▼
+        ┌───────────────────────────────┐
+        │   DataIntegrator              │
+        │   create_feature_vectors()   │
+        ├───────────────────────────────┤
+        │ 1. Create missingness masks  │
+        │ 2. Normalize features        │
+        │ 3. Structure per-patient     │
         └───────────────────────────────┘
                         │
                         ▼
@@ -649,102 +451,15 @@ Raw PPMI CSV Files
         │   PPMILongitudinalDataset     │
         │   (PyTorch Dataset)           │
         ├───────────────────────────────┤
-        │ - Feature extraction          │
-        │ - Missingness masks           │
-        │ - Sequence padding            │
+        │ Convert to tensors            │
+        │ Extract targets & masks       │
         └───────────────────────────────┘
                         │
                         ▼
-              Training DataLoader
-```
-
-### Using the Base Loader Classes
-
-**Creating a new StaticDataLoader:**
-```python
-from data.base_loader import StaticDataLoader
-
-class MyStaticLoader(StaticDataLoader):
-    def load(self) -> pd.DataFrame:
-        # Start with valid participants
-        df = self._load_and_filter_participants(self.config)
-        
-        # Load your data
-        my_data = pd.read_csv(...)
-        
-        # Merge
-        df = df.merge(my_data, on='PATNO', how='inner')
-        return df
-```
-
-**Creating a new LongitudinalDataLoader:**
-```python
-from data.base_loader import LongitudinalDataLoader
-
-class MyLongitudinalLoader(LongitudinalDataLoader):
-    def load(self) -> pd.DataFrame:
-        # Load your longitudinal data
-        df = pd.read_csv(...)
-        
-        # Filter to valid participants
-        df = self.filter_by_valid_participants(df, self.config)
-        
-        # Compute time since baseline
-        df = self.compute_time_since_baseline(df)
-        
-        return df
-```
-
-### Converting DataFrames to Dataset Format
-
-For training or inference, you may need to convert DataFrame format to the structure expected by `PPMILongitudinalDataset`:
-
-```python
-from data.data_integrator import DataIntegrator
-
-integrator = DataIntegrator(config)
-
-# Option 1: Get DataFrames (for inspection, saving to CSV)
-prepared_data = integrator.prepare_final_dataset()
-# Returns: {'static': DataFrame, 'longitudinal': DataFrame, 'slopes': DataFrame, 'metadata': dict}
-
-# Option 2: Convert directly to dataset format (with missing value handling)
-feature_vectors = integrator.create_feature_vectors(prepared_data)
-# Returns: {'static_data': Dict[PATNO, {...}], 'longitudinal_data': Dict[PATNO, [...]], 'slopes': Dict[PATNO, Dict[str, float]]}
-# Note: slopes dict contains all computed slopes per patient (NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope)
-#       Model predicts all 4 slopes per patient (one per UPDRS total)
-
-# Option 3: Auto-convert (calls prepare_final_dataset internally)
-feature_vectors = integrator.create_feature_vectors()
-```
-
-**Key differences:**
-- `prepare_final_dataset()` → Returns **DataFrames** (good for CSV export, inspection)
-- `create_feature_vectors()` → Returns **structured dicts** (good for PyTorch Dataset creation)
-
-The `create_feature_vectors()` method automatically:
-- Creates missing value masks (1 = missing, 0 = present)
-- Converts NaN values to 0.0
-- Structures data per-patient for `PPMILongitudinalDataset`
-
-**Important**: `create_feature_vectors()` is **REQUIRED** for training, not optional. It must be called to convert DataFrames (with NaN values) into the masked format that `PPMILongitudinalDataset` expects. The `create_dataloaders()` function automatically calls `create_feature_vectors()` if you pass in DataFrame format.
-
-### Creating DataLoaders for Training
-
-The `create_dataloaders()` function handles the complete pipeline:
-
-```python
-from data.data_integrator import DataIntegrator
-from data.dataset import create_dataloaders
-
-# Option 1: Pass DataFrames (create_feature_vectors called automatically)
-integrator = DataIntegrator(config)
-prepared_data = integrator.prepare_final_dataset()  # Returns DataFrames
-train_loader, val_loader, test_loader = create_dataloaders(prepared_data, config)
-
-# Option 2: Pass feature vectors (already masked)
-feature_vectors = integrator.create_feature_vectors(prepared_data)
-train_loader, val_loader, test_loader = create_dataloaders(feature_vectors, config)
+              DataLoader (with collate_fn)
+              - Padding
+              - Batching
+              - Attention masks
 ```
 
 ---
@@ -755,544 +470,393 @@ train_loader, val_loader, test_loader = create_dataloaders(feature_vectors, conf
 
 Each modality is embedded with explicit missingness handling:
 
+**StaticFeatureEmbedding** (patient-level):
 ```python
-# Input: values + mask
-values = [x1, x2, x3]  # Actual values (0 if missing)
-mask = [0, 1, 0]       # 1 if missing, 0 if observed
-
-# Concatenate and embed
-embedding = MLP([values, mask])  # Model learns to use mask
+Input: values [batch, n_static], mask [batch, n_static]
+Process: MLP([values, mask])  # Concatenate values + mask
+Output: [batch, d_model]
 ```
 
-### 2. Time Encoding
-
-Uses **continuous time** (actual months since baseline):
-
+**VisitFeatureEmbedding** (visit-level):
 ```python
-time_encoding = SinusoidalEncoding(months_since_baseline)
-# Not just visit indices: 0, 1, 2, 3...
-# But actual timing: 0, 3, 6, 12, 18, 24, 36...
+Input: values [batch, seq_len, n_features], mask [batch, seq_len, n_features]
+Process: MLP([values, mask])  # Concatenate along feature dimension
+Output: [batch, seq_len, d_model]
 ```
 
-### 3. Transformer Encoder
+**Architecture**:
+- Input: `n_features * 2` (values + mask concatenated)
+- Hidden layers: Configurable MLP (default: `[128]`)
+- Activation: GELU
+- Normalization: LayerNorm after each hidden layer
+- Output: `d_model` (default: 256)
 
-- 4 layers, 8 attention heads
-- Pre-LayerNorm architecture (more stable)
-- Attention masks for variable-length sequences
+### 2. Time Encoding (`models/embeddings.py`)
 
-### 4. Prediction Heads
+**SinusoidalTimeEncoding**: Continuous time encoding based on actual months since baseline
 
-**Next-Visit Head:**
-- Input: Hidden state at time t
-- Output: Predicted UPDRS totals at t+1
-  - NP1RTOT (non-motor experiences, 0-52)
-  - NP2PTOT (motor ADL, 0-52)
-  - NP3TOT (motor examination, 0-132)
-  - NP4TOT (motor complications, 0-24)
-- Loss: MSE (summed across all totals)
+```python
+time_encoding = SinusoidalTimeEncoding(d_model=256, max_time=120.0)
+time_emb = time_encoding(time_months)  # [batch, seq_len] → [batch, seq_len, d_model]
+```
 
-**Slope Head:**
-- Input: Pooled sequence representation
-- Output: Patient-level progression slopes for all 4 UPDRS totals `[batch, 4]`
-  - NP1RTOT_slope (non-motor progression)
-  - NP2PTOT_slope (motor ADL progression)
-  - NP3TOT_slope (motor examination progression, primary outcome)
-  - NP4TOT_slope (complications progression)
-- Target: Empirical slopes computed from ≥3 visits using linear regression for each UPDRS total
-- Loss: Masked MSE (only valid slopes contribute to loss)
-- Metrics: Per-target MAE, RMSE, and Spearman correlation with support counts
+**Formula**:
+- Normalize time: `time_normalized = time / max_time`
+- Sinusoidal encoding: `PE(pos, 2i) = sin(time_normalized * div_term[i])`
+- `PE(pos, 2i+1) = cos(time_normalized * div_term[i])`
+
+**Key**: Uses actual months (0, 3, 6, 12, 18, ...), not visit indices (0, 1, 2, 3, ...).
+
+### 3. Visit Token Builder (`models/embeddings.py`)
+
+**VisitTokenBuilder**: Combines enabled modality embeddings into visit tokens
+
+```python
+visit_builder = VisitTokenBuilder(d_model=256, enabled_modalities=['static', 'motor', ...])
+visit_tokens = visit_builder(embeddings, seq_len)
+```
+
+**Process**:
+1. Expand static embedding: `[batch, d_model]` → `[batch, seq_len, d_model]` (broadcast to all visits)
+2. Concatenate all enabled modality embeddings: `[batch, seq_len, d_model * n_modalities]`
+3. Project to `d_model`: `Linear(d_model * n_modalities → d_model)`
+4. Add time encoding: `visit_tokens + time_emb`
+
+**Output**: `[batch, seq_len, d_model]`
+
+### 4. Transformer Encoder (`models/v1_model.py`)
+
+**Architecture**:
+- **Layers**: 4 (configurable)
+- **Heads**: 8 (configurable)
+- **d_model**: 256 (configurable)
+- **dim_feedforward**: 1024 (configurable)
+- **Activation**: GELU
+- **Normalization**: Pre-LayerNorm (more stable)
+- **Dropout**: 0.1 (configurable)
+
+**Attention Masking**:
+- `src_key_padding_mask`: `[batch, seq_len]`, `True = padding position` (masked out)
+- Derived from `attention_mask` in forward pass
+
+**Output**: `[batch, seq_len, d_model]` - contextualized visit representations
+
+### 5. Prediction Heads (`models/heads.py`)
+
+**NextVisitPredictionHead**:
+```python
+Input: hidden_states [batch, seq_len, d_model]
+Process: MLP(hidden_states)  # Applied per position
+Output: [batch, seq_len, 4]  # Predictions for next visit
+```
+
+**Architecture**:
+- Hidden layers: `[128, 64]` (configurable)
+- Activation: GELU
+- Normalization: LayerNorm
+- Output: 4 values (NP1RTOT, NP2PTOT, NP3TOT, NP4TOT)
+
+**Usage**: Predicts UPDRS totals at visit `t+1` from hidden state at visit `t`.
+
+**ProgressionSlopeHead**:
+```python
+Input: hidden_states [batch, seq_len, d_model], attention_mask [batch, seq_len]
+Process:
+  1. Pool sequence: mean(hidden_states, dim=1, masked by attention_mask)
+  2. MLP(pooled)
+Output: [batch, 4]  # One slope per UPDRS total
+```
+
+**Pooling Methods**:
+- `mean`: Masked mean pooling (default)
+- `last`: Last valid position
+- `max`: Masked max pooling
+
+**Architecture**:
+- Hidden layers: `[128, 64]` (configurable)
+- Activation: GELU
+- Normalization: LayerNorm
+- Output: 4 values (NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope)
+
+**Usage**: Predicts patient-level progression slopes from entire sequence.
+
+### 6. Loss Computation (`models/v1_model.py`)
+
+**Multi-Task Loss**:
+```python
+total_loss = loss_next_visit + lambda_slope * loss_slope
+```
+
+**Next-Visit Loss**:
+```python
+# Shift predictions and targets
+preds = predictions['next_visit'][:, :-1, :]  # [batch, seq_len-1, 4]
+targets = targets['next_visit'][:, 1:, :]      # [batch, seq_len-1, 4]
+label_mask = targets['next_visit_mask'][:, 1:, :]  # [batch, seq_len-1, 4]
+
+# Combined mask: attention_mask AND label_mask
+combined_mask = attention_mask[:, :-1].unsqueeze(-1) * label_mask
+
+# Masked MSE
+mse = (preds - targets) ** 2
+loss = (mse * combined_mask).sum() / combined_mask.sum()
+```
+
+**Slope Loss**:
+```python
+preds = predictions['slope']  # [batch, 4]
+targets = targets['slope']   # [batch, 4]
+
+# Mask out NaN targets
+valid_mask = ~torch.isnan(targets)
+targets_masked = torch.where(valid_mask, targets, torch.zeros_like(targets))
+
+# Masked MSE
+mse = (preds - targets_masked) ** 2
+loss = (mse * valid_mask).sum() / valid_mask.sum()
+```
+
+**Key**: Both losses use proper masking to exclude invalid predictions/targets.
 
 ---
 
-## Training
+## Training Process
 
-### Training with `main.py` (Recommended)
+### Training Workflow
 
-The `training/main.py` script provides a unified CLI entrypoint for all training workflows. It supports multiple training modes, automatic checkpointing, and multi-modal ablation studies.
+The training process follows this workflow:
 
-#### Quick Start
+```
+1. Load Configuration
+   └─→ training/config.py: get_default_config()
 
-```bash
-# Default: 5-fold cross-validation training
-python -m training.main
+2. Prepare Data
+   └─→ DataIntegrator.prepare_final_dataset()
+       └─→ Returns DataFrames (static, longitudinal, slopes)
 
-# With custom settings
-python -m training.main --mode kfold --n-splits 5 --max-epochs 70 --batch-size 32
+3. Create DataLoaders
+   └─→ create_dataloaders() or create_kfold_dataloaders()
+       ├─→ Split patients into train/val/test
+       ├─→ Fit scalers on training data only
+       ├─→ Create feature vectors (with masks)
+       ├─→ Create PPMILongitudinalDataset
+       └─→ Return DataLoaders
+
+4. Initialize Model
+   └─→ V1MultimodalTransformer(config)
+       ├─→ Create modality embeddings (for enabled modalities)
+       ├─→ Create visit token builder
+       ├─→ Create time encoding
+       ├─→ Create transformer encoder
+       └─→ Create prediction heads
+
+5. Initialize Trainer
+   └─→ V1Trainer(model, config, train_loader, val_loader, device)
+       ├─→ AdamW optimizer
+       ├─→ WarmupCosineAnnealingLR scheduler
+       └─→ Training history tracking
+
+6. Training Loop
+   └─→ For each epoch:
+       ├─→ Train epoch:
+       │   ├─→ For each batch:
+       │   │   ├─→ Forward pass: model(batch)
+       │   │   ├─→ Compute loss: model.compute_loss(predictions, targets)
+       │   │   ├─→ Backward pass: loss.backward()
+       │   │   └─→ Optimizer step: optimizer.step()
+       │   └─→ Average losses
+       │
+       ├─→ Validate:
+       │   ├─→ For each batch:
+       │   │   ├─→ Forward pass (no gradients)
+       │   │   └─→ Accumulate predictions and targets
+       │   ├─→ Compute comprehensive metrics
+       │   └─→ Average losses
+       │
+       ├─→ Update scheduler: scheduler.step(val_loss)
+       ├─→ Check for best model: Save if val_loss improved
+       └─→ Early stopping: Stop if no improvement for N epochs
+
+7. Save Checkpoint
+   └─→ Save model, optimizer, scheduler, metrics, history
 ```
 
 ### Training Modes
 
-The `--mode` flag determines the training strategy:
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| `kfold` | K-fold cross-validation (default) | Robust evaluation, model selection |
-| `single` | Single train/val/test split | Quick experiments, fine-tuning |
-| `multi_modal` | Train multiple models with different modality combinations | Ablation studies, modality comparison |
-
-### Command-Line Arguments
-
-```bash
-python -m training.main [OPTIONS]
-
-# Mode Selection
---mode {kfold,single,multi_modal}   # Training mode (default: kfold)
---config-version {v1,v2}             # Config version (default: v1)
-
-# K-Fold CV Settings (for --mode kfold or multi_modal)
---n-splits N                         # Number of CV folds (default: 5)
---test-ratio RATIO                   # Test set ratio (default: 0.2)
-
-# Single Split Settings (for --mode single)
---train-ratio RATIO                  # Train split ratio (default: 0.8)
---val-ratio RATIO                    # Val split ratio (default: 0.1)
-
-# Hyperparameters (override config defaults)
---max-epochs N                       # Maximum epochs
---patience N                         # Early stopping patience
---batch-size N                       # Batch size
---learning-rate LR                   # Learning rate
---weight-decay WD                    # Weight decay
-
-# Multi-Modal Training (for --mode multi_modal)
---modalities SPEC [SPEC ...]         # Modality configurations to train
---force-retrain                      # Force retrain even if checkpoint exists
-
-# Fine-Tuning (for --mode single)
---checkpoint PATH                    # Path to checkpoint for fine-tuning
---resume-mode {model-only,full}      # Resume mode (default: model-only)
---freeze-backbone                    # Freeze embeddings + transformer
-
-# Other Options
---device {cuda,mps,cpu}              # Device (default: auto-detect)
---num-workers N                      # DataLoader workers (default: 0)
---seed N                             # Random seed (default: 42)
---no-normalize                       # Disable feature normalization
---evaluate-test                      # Evaluate on test set after training
-```
-
-### Training Examples
-
-#### 1. K-Fold Cross-Validation (Default)
-
-**Best for:** Model evaluation, hyperparameter selection, robust performance estimates.
-
-```bash
-# Default 5-fold CV with 20% test set
-python -m training.main
-
-# Custom CV settings
-python -m training.main \
-  --mode kfold \
-  --n-splits 3 \
-  --test-ratio 0.15 \
-  --max-epochs 70 \
-  --patience 10 \
-  --evaluate-test
-
-# Using config v2
-python -m training.main \
-  --config-version v2 \
-  --n-splits 5
-```
-
-**Output:**
-- Per-fold checkpoints: `models/checkpoints/fold_1/`, `fold_2/`, etc.
-- CV results: `models/checkpoints/kfold_results.json`
-- Average validation loss across folds with standard deviation
-
-#### 2. Single Train/Val/Test Split
-
-**Best for:** Quick experiments, fine-tuning from a checkpoint, development.
-
-```bash
-# Standard single split
-python -m training.main \
-  --mode single \
-  --train-ratio 0.8 \
-  --val-ratio 0.1
-
-# Fine-tuning from checkpoint
-python -m training.main \
-  --mode single \
-  --checkpoint models/checkpoints/best_checkpoint.pt \
-  --resume-mode model-only \
-  --learning-rate 5e-5
-
-# Head-only fine-tuning (freeze backbone)
-python -m training.main \
-  --mode single \
-  --checkpoint models/checkpoints/best_checkpoint.pt \
-  --freeze-backbone \
-  --learning-rate 1e-4
-```
-
-#### 3. Multi-Modal Ablation Studies
-
-**Best for:** Comparing different modality combinations, understanding which modalities matter most.
-
-```bash
-# Train with default modality sets
-python -m training.main --mode multi_modal
-
-# Train specific modality combinations
-python -m training.main \
-  --mode multi_modal \
-  --modalities all static+motor motor_only static_only
-
-# Use predefined sets + custom combinations
-python -m training.main \
-  --mode multi_modal \
-  --modalities all static+motor static,motor,nonmotor
-
-# Force retrain everything (ignore existing checkpoints)
-python -m training.main \
-  --mode multi_modal \
-  --modalities all static+motor \
-  --force-retrain
-```
-
-**Predefined Modality Sets:**
-- `all`: All modalities (default)
-- `static+motor`: Static + motor only
-- `static+nonmotor`: Static + non-motor only
-- `motor_only`: Motor only
-- `static_only`: Static only
-- `no_static`: All except static
-- `no_motor`: All except motor
-- And more...
-
-**Custom Combinations:**
-- Use comma-separated list: `static,motor,nonmotor`
-- Automatically sorted and deduplicated
-
-**Output Structure:**
-```
-models/checkpoints/
-├── modalities_all/
-│   ├── fold_1/
-│   │   └── training_history.json  # Per-epoch training curves
-│   ├── fold_2/
-│   │   └── training_history.json
-│   ├── kfold_results.json  # CV results with modality metadata
-│   └── test_metrics.json  # Test set evaluation (if evaluated)
-├── modalities_static+motor/
-│   ├── kfold_results.json
-│   └── test_metrics.json
-└── ...
-```
-
-**Checkpoint Detection:**
-- Automatically skips already-trained configurations
-- Checks for `kfold_results.json` with `status='completed'`
-- Use `--force-retrain` to retrain anyway
-
-### Training Workflows
-
-#### Workflow 1: Model Selection with K-Fold CV
-
-```bash
-# Step 1: Run k-fold CV to select best hyperparameters
-python -m training.main \
-  --mode kfold \
-  --n-splits 5 \
-  --max-epochs 100 \
-  --learning-rate 1e-4
-
-# Step 2: Review results in models/checkpoints/kfold_results.json
-# Step 3: Adjust hyperparameters and retrain if needed
-# Step 4: Use train_full mode (TODO) to train final model on all data
-```
-
-#### Workflow 2: Modality Ablation Study
-
-```bash
-# Step 1: Train all modality configurations
-python -m training.main \
-  --mode multi_modal \
-  --modalities all static+motor static+nonmotor motor_only static_only
-
-# Step 2: Review results in each modality folder (e.g., models/checkpoints/modalities_motor_only/kfold_results.json)
-# Step 3: Use aggregate_summaries() method to compare all results, or manually review each folder
-# Step 4: Identify best modality combination
-# Step 4: Train final model with best configuration
-python -m training.main \
-  --mode kfold \
-  --config-version v1
-  # (manually edit config.model.enabled_modalities to best combination)
-```
-
-#### Workflow 3: Fine-Tuning Pipeline
-
-```bash
-# Step 1: Train base model with all modalities
-python -m training.main --mode kfold --n-splits 5
-
-# Step 2: Fine-tune best fold's model
-python -m training.main \
-  --mode single \
-  --checkpoint models/checkpoints/fold_1/best_checkpoint.pt \
-  --resume-mode model-only \
-  --learning-rate 5e-5
-
-# Step 3: Optional: Head-only fine-tuning
-python -m training.main \
-  --mode single \
-  --checkpoint models/checkpoints/best_checkpoint.pt \
-  --freeze-backbone \
-  --learning-rate 1e-4
-```
-
-### Default Hyperparameters
-
+**1. Single Train/Val/Test Split**:
 ```python
-# Model
-d_model = 256
-n_heads = 8
-n_layers = 4
-dropout = 0.1
+train_loader, val_loader, test_loader = create_dataloaders(
+    prepared_data, config,
+    train_ratio=0.7, val_ratio=0.15, test_ratio=0.15
+)
 
-# Training
-batch_size = 32
-learning_rate = 1e-4
-weight_decay = 1e-5
-lambda_slope = 0.2      # Weight for slope loss
-max_epochs = 100
-early_stopping_patience = 15
-```
-
-All hyperparameters can be overridden via command-line arguments (see `--max-epochs`, `--learning-rate`, etc.).
-
-### Training Programmatically (Advanced)
-
-For programmatic access, you can still use the training classes directly:
-
-```python
-from models.v1_model import V1MultimodalTransformer
-from training.train import V1Trainer
-from training.kfold_trainer import KFoldTrainer
-from training.multi_modal_trainer import MultiModalTrainer
-from training.config import get_default_config
-from data.data_integrator import DataIntegrator
-
-config = get_default_config()
-
-# Option 1: Single training
-model = V1MultimodalTransformer(config)
 trainer = V1Trainer(model, config, train_loader, val_loader, device='cuda')
 trainer.train(max_epochs=100, early_stopping_patience=15)
+```
 
-# Option 2: K-fold CV
-integrator = DataIntegrator(config, normalize_features=True)
-prepared = integrator.prepare_final_dataset()
-kfold_trainer = KFoldTrainer(config, prepared, n_splits=5)
-results = kfold_trainer.train()
-
-# Option 3: Multi-modal ablation
-multi_modal_trainer = MultiModalTrainer(config, prepared)
-results = multi_modal_trainer.train_multiple(
-    modality_specs=['all', 'static+motor', 'motor_only'],
-    force_retrain=False
+**2. K-Fold Cross-Validation**:
+```python
+fold_dataloaders, test_loader = create_kfold_dataloaders(
+    prepared_data, config, n_splits=5, test_ratio=0.2
 )
+
+for fold_idx, (train_loader, val_loader) in enumerate(fold_dataloaders):
+    model = V1MultimodalTransformer(config)
+    trainer = V1Trainer(model, config, train_loader, val_loader, device='cuda')
+    trainer.train(max_epochs=100, early_stopping_patience=15)
+    # Save fold checkpoint
 ```
 
-### Expected Performance
+**3. Multi-Modal Ablation**:
+```python
+modality_configs = [
+    ['static', 'motor', 'nonmotor', 'medication', 'age_at_visit'],  # All
+    ['static', 'motor'],  # Static + motor only
+    ['static', 'motor', 'nonmotor'],  # Without medication
+    # ... more combinations
+]
 
-| Metric | Target | Interpretation |
-|--------|--------|----------------|
-| Next-visit MAE | < 5 points | On NP3TOT (primary motor outcome, 0-132 scale) |
-| Next-visit MAE | < 3 points | On NP1RTOT, NP2PTOT (0-52 scale) |
-| Next-visit MAE | < 2 points | On NP4TOT (0-24 scale) |
-| Slope Spearman correlation | r > 0.5 | With empirical slopes (per-target, NP3TOT most important) |
-| ON vs OFF gap | 5-10 points | NP3TOT medication effect (NP2PTOT also shows effect) |
+for modalities in modality_configs:
+    config.model.enabled_modalities = modalities
+    # Train model with this modality combination
+```
 
-### Uploading Checkpoints to Hugging Face
+### Training Details
 
-The `upload_checkpoints.py` script (located in `Experiment/`) allows you to upload all model checkpoints to Hugging Face Hub for easy sharing and version control.
+**Optimizer**: AdamW
+- Learning rate: `1e-4` (configurable)
+- Weight decay: `1e-5` (configurable)
+- Gradient clipping: `max_norm=1.0`
 
-#### Prerequisite
+**Scheduler**: WarmupCosineAnnealingLR
+- Warmup epochs: `10% of max_epochs` (configurable)
+- Cosine annealing: `target_lr → min_lr` (min_lr = target_lr * 0.1)
+- Applied per epoch based on validation loss
 
-##### Install the Hugging Face CLI (if not installed)
+**Loss Weights**:
+- `lambda_slope = 0.2` (configurable)
+- Total loss: `loss_next_visit + lambda_slope * loss_slope`
+
+**Early Stopping**:
+- Patience: `15 epochs` (configurable)
+- Metric: Validation loss
+- Saves best model checkpoint
+
+**Checkpointing**:
+- Saves after each epoch: `latest_checkpoint.pt`
+- Saves best model: `best_checkpoint.pt`
+- Includes: model state, optimizer state, scheduler state, metrics, training history
+
+**Metrics Computed** (during validation):
+- **Next-visit metrics** (per target: NP1RTOT, NP2PTOT, NP3TOT, NP4TOT):
+  - MAE, RMSE, R², Pearson correlation, Spearman correlation
+  - Per-Δt bucket metrics (0-6mo, 6-12mo, 12-24mo, 24+mo)
+  - Overall macro/weighted averages
+- **Slope metrics** (per target: NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope):
+  - MAE, RMSE, Spearman correlation
+  - Overall macro averages
+
+### Using the CLI (`training/main.py`)
+
+**Recommended**: Use the unified CLI entrypoint:
+
 ```bash
-brew install huggingface-cli
-# curl -LsSf https://hf.co/cli/install.sh | bash
+# Default: 5-fold cross-validation
+python -m training.main
+
+# Single split training
+python -m training.main --mode single --train-ratio 0.8 --val-ratio 0.1
+
+# K-fold CV with custom settings
+python -m training.main --mode kfold --n-splits 5 --max-epochs 100 --batch-size 32
+
+# Multi-modal ablation
+python -m training.main --mode multi_modal --modalities all static+motor motor_only
 ```
 
-##### (optional) Login with your Hugging Face credentials
+See `python -m training.main --help` for all options.
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.8+
+- PyTorch 1.12+
+- PPMI data access
+
+### 1. Activate Virtual Environment
+
 ```bash
-huggingface-cli login
-# hf auth login
+# Option A: conda
+conda activate sri_hri
+
+# Option B: pyenv (virtualenv)
+pyenv virtualenv 3.10.13 pd-v1
+pyenv activate pd-v1
 ```
 
-#### Usage
+### 2. Install Dependencies
 
 ```bash
-# UPLOAD
-huggingface-cli upload SRI-HRI/PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/  modalities_age_at_visit+medication+motor+non_motor+static/. --allow-patterns="*.pt"
-# hf upload SRI-HRI/PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/ modalities_age_at_visit+medication+motor+non_motor+static/ --include="*.pt"
-
-# DELETE
-# delete all .pt file
-# hf repo-files delete SRI-HRI/PD-v1 "*.pt"
-
-# DOWNLOAD 
-# huggingface-cli download SRI-HRI/PD-v1 modalities_age_at_visit+medication+motor+non_motor+static/fold_7/best_checkpoint.pt --local-dir models/checkpoints/
+# From Experiment/V1_implementation
+cd Experiment/V1_implementation
+python -m pip install -r ../../requirements.txt
 ```
 
-## Metrics and Evaluation
+### 3. Install Package in Editable Mode
 
-The model computes comprehensive evaluation metrics that are saved in checkpoints and can be used for model comparison and analysis.
-
-### Metrics Structure
-
-All metrics are computed during validation and stored in checkpoints under `val_metrics` (current epoch) and `best_val_metrics` (best epoch).
-
-#### Next-Visit Metrics (Per-Visit Regression)
-
-**Per-Target Metrics** (one per UPDRS total: NP1RTOT, NP2PTOT, NP3TOT, NP4TOT):
-- **MAE** (Mean Absolute Error): Average absolute difference between predictions and targets
-- **RMSE** (Root Mean Squared Error): Square root of average squared differences
-- **R²** (Coefficient of Determination): Proportion of variance explained
-- **Pearson Correlation**: Linear correlation coefficient
-- **Spearman Correlation**: Rank-based correlation (robust to non-linear relationships)
-- **n_samples**: Number of evaluated samples (support count)
-
-**Per-Δt Bucket Metrics** (grouped by time intervals between visits):
-- Metrics computed separately for different time gaps:
-  - `dt_0_6`: 0-6 months between visits
-  - `dt_6_12`: 6-12 months between visits
-  - `dt_12_24`: 12-24 months between visits
-  - `dt_24_inf`: 24+ months between visits
-- Each bucket includes: MAE, RMSE, and n_samples
-
-**Overall Next-Visit Metrics**:
-- **macro_avg_mae**: Mean of MAEs across all targets (equal weight)
-- **macro_avg_rmse**: Mean of RMSEs across all targets
-- **macro_avg_r2**: Mean of R² values across all targets
-- **macro_avg_correlation**: Mean of Pearson correlations across all targets
-- **macro_avg_spearman**: Mean of Spearman correlations across all targets
-- **weighted_avg_mae**: MAE weighted by number of samples per target
-- **weighted_avg_rmse**: RMSE weighted by number of samples per target
-- **total_samples**: Total number of evaluated samples across all targets
-
-#### Slope Metrics (Patient-Level Regression)
-
-**Per-Target Slope Metrics** (one per UPDRS total slope: NP1RTOT_slope, NP2PTOT_slope, NP3TOT_slope, NP4TOT_slope):
-- **MAE**: Mean absolute error for slope predictions
-- **RMSE**: Root mean squared error for slope predictions
-- **Spearman Correlation**: Rank-based correlation (important for progression trends)
-- **n_samples**: Number of patients with valid slope labels (support count)
-
-**Overall Slope Metrics**:
-- **mae**: Macro-average MAE across all slope targets
-- **rmse**: Macro-average RMSE across all slope targets
-- **spearman**: Macro-average Spearman correlation across all slope targets
-- **n_samples**: Total number of patients with valid slope labels
-
-### Why Support Counts Matter
-
-**Always check support counts** to avoid misleading metrics:
-- A "good overall average" can hide that one target has almost no evaluated examples
-- Low support counts indicate insufficient data for reliable evaluation
-- Per-target metrics with support counts show where the model is actually being evaluated
-
-**Example**:
-```json
-{
-  "next_visit": {
-    "NP1RTOT": {"mae": 2.5, "n_samples": 1500},
-    "NP2PTOT": {"mae": 3.1, "n_samples": 1480},
-    "NP3TOT": {"mae": 4.8, "n_samples": 1520},
-    "NP4TOT": {"mae": 1.2, "n_samples": 200}  // ⚠️ Low support!
-  }
-}
+```bash
+# From V1_implementation directory
+pip install -e .
 ```
 
-In this example, NP4TOT has much lower support (200 vs ~1500), so its metrics are less reliable.
+This enables:
+- Proper import resolution (e.g., `from training.config import ...`)
+- IDE support (IntelliJ/PyCharm)
+- Immediate code changes without reinstalling
 
-### Accessing Metrics
+### 4. Configure Data Paths
 
-#### From Checkpoints
+Edit `training/config.py` to point to your PPMI data:
 
 ```python
-import torch
-
-# Load checkpoint
-checkpoint = torch.load('models/checkpoints/best_checkpoint.pt')
-
-# Access metrics
-val_metrics = checkpoint['val_metrics']  # Current epoch metrics
-best_val_metrics = checkpoint['best_val_metrics']  # Best epoch metrics
-
-# Example: Get NP3TOT next-visit MAE
-np3tot_mae = best_val_metrics['next_visit']['NP3TOT']['mae']
-np3tot_n_samples = best_val_metrics['next_visit']['NP3TOT']['n_samples']
-
-# Example: Get overall slope metrics
-slope_mae = best_val_metrics['slope_overall']['mae']
-slope_spearman = best_val_metrics['slope_overall']['spearman']
+@dataclass
+class DataConfig:
+    # Use absolute paths (recommended)
+    base_dir: str = "/full/path/to/ppmi_pd"
+    participant_status: str = "Participant_Status_14Dec2025.csv"
+    genetic_consensus: str = "/full/path/to/genetics/iu_genetic_consensus_*.csv"
 ```
 
-#### From K-Fold Results
+**Path Resolution Rules**:
+- Paths starting with `/` are treated as absolute paths
+- Paths starting with `../` are resolved relative to current working directory
+- Other paths are resolved relative to `base_dir`
 
-K-fold training saves test metrics to JSON:
+### 5. Test Components
 
-```python
-import json
+```bash
+# Test configuration
+python training/config.py
 
-# Load k-fold results
-with open('models/checkpoints/kfold_results.json', 'r') as f:
-    results = json.load(f)
+# Test model architecture
+python models/v1_model.py
 
-# Access test metrics (if --evaluate-test was used)
-with open('models/checkpoints/test_metrics.json', 'r') as f:
-    test_metrics = json.load(f)
-    
-# Test metrics structure
-test_metrics = {
-    'losses': {...},
-    'metrics': {
-        'next_visit': {...},
-        'next_visit_overall': {...},
-        'slope': {...},
-        'slope_overall': {...}
-    }
-}
+# Test data pipeline
+python data/data_integrator.py
 ```
 
-### Interpreting Metrics
+### 6. Train Model
 
-#### Next-Visit Metrics
+```bash
+# Default: 5-fold cross-validation
+python -m training.main
 
-- **MAE < 5 points** on NP3TOT (0-132 scale) is considered good
-- **MAE < 3 points** on NP1RTOT, NP2PTOT (0-52 scale) is considered good
-- **MAE < 2 points** on NP4TOT (0-24 scale) is considered good
-- **R² > 0.3** indicates meaningful predictive power
-- **Correlation > 0.5** (Pearson or Spearman) shows strong relationship
-
-#### Slope Metrics
-
-- **Spearman correlation > 0.5** indicates good rank-order agreement with empirical slopes
-- **MAE < 0.5 points/month** on NP3TOT_slope is considered good
-- Slope metrics are particularly important for long-term progression tracking
-
-#### Per-Δt Bucket Metrics
-
-- Helps identify if model performance varies by time gap between visits
-- Short-term predictions (0-6 months) may be more accurate than long-term (24+ months)
-- Useful for understanding model limitations at different prediction horizons
-
-### Metric Computation Details
-
-Metrics are computed using:
-- **Masked evaluation**: Only valid (non-NaN) targets contribute to metrics
-- **Per-target computation**: Each UPDRS total is evaluated separately
-- **Support-aware aggregation**: Overall metrics account for varying sample sizes
-
-The metrics computation handles:
-- Missing labels: NaN targets are excluded from evaluation
-- Variable sequence lengths: Padding is masked out
-- Per-target missingness: Different targets may have different availability
+# With custom settings
+python -m training.main --mode kfold --n-splits 5 --max-epochs 100 --batch-size 32
+```
 
 ---
 
@@ -1300,36 +864,40 @@ The metrics computation handles:
 
 All settings are in `training/config.py`:
 
-### Feature Configuration
-
-```python
-@dataclass
-class FeatureConfig:
-    # Static features
-    static_features: List[str]      # Genetics + demographics
-    
-    # UPDRS by part
-    part1_features: List[str]       # Non-motor (+ NP1RTOT)
-    part2_features: List[str]       # Motor ADL (+ NP2PTOT)
-    part3_features: List[str]       # Motor exam (+ NP3TOT)
-    part4_features: List[str]       # Complications (+ NP4TOT)
-    
-    # Other
-    other_nonmotor_features: List[str]  # MoCA, ESS, etc.
-    medication_features: List[str]      # LEDD, PDMEDYN
-```
-
 ### Model Configuration
 
 ```python
 @dataclass
 class ModelConfig:
-    d_model: int = 256
-    n_heads: int = 8
-    n_layers: int = 4
-    dropout: float = 0.1
-    max_seq_len: int = 20
-    predict_totals: List[str] = ['NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT']  # All UPDRS totals
+    d_model: int = 256                    # Embedding dimension
+    n_heads: int = 8                      # Attention heads
+    n_layers: int = 4                     # Transformer layers
+    dim_feedforward: int = 1024           # FFN dimension
+    dropout: float = 0.1                  # Dropout rate
+    max_seq_len: int = 20                # Maximum sequence length
+    max_time_months: float = 120.0        # Max time for encoding
+    enabled_modalities: List[str] = field(default_factory=lambda: [
+        'static', 'motor', 'nonmotor', 'medication', 'age_at_visit'
+    ])
+    predict_totals: List[str] = field(default_factory=lambda: [
+        'NP1RTOT', 'NP2PTOT', 'NP3TOT', 'NP4TOT'
+    ])
+```
+
+### Training Configuration
+
+```python
+@dataclass
+class TrainingConfig:
+    batch_size: int = 32
+    learning_rate: float = 1e-4
+    weight_decay: float = 1e-5
+    max_epochs: int = 100
+    early_stopping_patience: int = 15
+    lambda_slope: float = 0.2             # Slope loss weight
+    warmup_epochs: int = 10                # LR warmup epochs
+    warmup_ratio: float = 0.1             # Warmup as ratio of max_epochs
+    min_lr_ratio: float = 0.1             # Min LR = target_lr * min_lr_ratio
 ```
 
 ### Data Configuration
@@ -1338,84 +906,88 @@ class ModelConfig:
 @dataclass
 class DataConfig:
     base_dir: str = "../../ppmi_pd"
-    # Update all file paths to match your data
+    participant_status: str = "Participant_Status_14Dec2025.csv"
+    genetic_consensus: str = "Genetic_Status/iu_genetic_consensus_*.csv"
+    # ... more file paths
+    min_visits: int = 2                    # Minimum visits per patient
+    normalize_features: bool = True        # Z-score normalization
 ```
+
+### Feature Configuration
+
+See `training/config.py` for complete feature lists:
+- `static_features`: Genetics + demographics
+- `motor_features`: UPDRS Parts I-IV + supplementary
+- `non_motor_features`: MoCA, ESS, SCOPA-AUT, etc.
+- `medication_features`: LEDD, ON/OFF status, etc.
+- `age_at_visit_features`: Age at each visit
 
 ---
 
-## UPDRS Structure
+## Project Structure
 
-The MDS-UPDRS has **4 parts**, each with its own total score:
+```
+V1_implementation/
+├── README.md                    # This file
+├── setup.py                     # Package setup
+├── pyproject.toml               # Python project configuration
+├── __init__.py                  # Package initialization
+│
+├── training/                   # Training & configuration
+│   ├── config.py               # All hyperparameters & paths
+│   ├── main.py                 # Unified CLI entrypoint (RECOMMENDED)
+│   ├── train.py                # Training loop (V1Trainer class)
+│   ├── kfold_trainer.py        # K-fold CV trainer class
+│   ├── multi_modal_trainer.py  # Multi-modal ablation trainer
+│   ├── metrics.py              # Comprehensive metrics computation
+│   └── __init__.py
+│
+├── models/                      # Model architecture
+│   ├── embeddings.py           # Modality embeddings + time encoding
+│   ├── heads.py                # Prediction heads
+│   ├── v1_model.py             # Complete V1 Transformer
+│   └── __init__.py
+│
+├── data/                        # Data loading & processing
+│   ├── base_loader.py          # Base classes (StaticDataLoader, LongitudinalDataLoader)
+│   ├── data_integrator.py      # Main integration pipeline
+│   ├── dataset.py              # PyTorch Dataset & DataLoader
+│   ├── feature_engineer.py     # Feature normalization & masking
+│   ├── label_engineer.py       # Slope computation
+│   ├── visit_index_builder.py  # Master timeline creation
+│   ├── __init__.py
+│   └── loaders/                # Individual data loaders
+│       ├── genetics_loader.py
+│       ├── demographics_loader.py
+│       ├── updrs_loader.py
+│       ├── non_motor_loader.py
+│       ├── medication_loader.py
+│       ├── age_at_visit_loader.py
+│       └── __init__.py
+│
+└── tests/                       # Test suite
+    ├── __init__.py
+    ├── conftest.py             # Pytest fixtures
+    ├── test_loaders.py         # Tests for data loaders
+    ├── test_models.py          # Tests for model components
+    ├── test_training.py        # Tests for training
+    └── test_data.py           # Tests for data processing
+```
 
-| Part | Code | Total | Range | What It Measures |
-|------|------|-------|-------|------------------|
-| I | NP1* | NP1RTOT | 0-52 | Non-motor experiences |
-| II | NP2* | NP2PTOT | 0-52 | Motor ADL (patient-reported) |
-| III | NP3* | NP3TOT | 0-132 | Motor examination (clinician) |
-| IV | NP4* | NP4TOT | 0-24 | Motor complications |
+### Key Files
 
-### Medication Sensitivity
-
-| Part | ON vs OFF Difference | Notes |
-|------|---------------------|-------|
-| Part I (NP1RTOT) | Minimal (~0-2 pts) | Non-dopaminergic symptoms |
-| Part II (NP2PTOT) | Moderate (~5-10 pts) | Patient-reported motor ADL |
-| Part III (NP3TOT) | **Large (~10-20 pts)** | Main progression outcome, clinician-observed |
-| Part IV (NP4TOT) | N/A | These ARE medication complications |
-
-### V1 Implementation
-
-V1 predicts **all four UPDRS totals**:
-- **NP1RTOT**: Non-motor experiences (baseline + progression)
-- **NP2PTOT**: Motor activities of daily living (patient perspective)
-- **NP3TOT**: Motor examination (primary outcome, clinician-observed)
-- **NP4TOT**: Motor complications (medication-related)
-
-This comprehensive approach captures:
-- Multi-domain progression (motor, non-motor, complications)
-- Different perspectives (patient-reported vs clinician-observed)
-- Medication effects (especially in NP3TOT and NP4TOT)
+- **Configuration**: `training/config.py` - All hyperparameters, paths, and settings
+- **Model**: `models/v1_model.py` - Complete V1 Transformer architecture
+- **Data Pipeline**: `data/data_integrator.py` - Main integration pipeline
+- **Training**: `training/train.py` - Training loop and V1Trainer class
+- **Dataset**: `data/dataset.py` - PyTorch Dataset & DataLoader utilities
+- **Tests**: `tests/` - Comprehensive test suite
 
 ---
 
 ## Testing
 
-### Test Suite Structure
-
-The project includes a comprehensive test suite in the `tests/` directory:
-
-```
-tests/
-├── __init__.py          # Test package initialization
-├── conftest.py          # Pytest fixtures and shared configuration
-├── test_models.py       # Tests for model components
-├── test_training.py     # Tests for training configuration
-├── test_data.py         # Tests for data processing pipeline
-└── data_loaders/        # Tests for individual data loaders
-    ├── __init__.py
-    ├── test_base_loader.py        # Base loader + interface tests
-    ├── test_demographics_loader.py
-    ├── test_genetics_loader.py
-    ├── test_updrs_loader.py
-    ├── test_non_motor_loader.py
-    └── test_medication_loader.py
-```
-
-### Running Tests
-
-#### Prerequisites
-
-Install dependencies (includes `pytest`). Optionally install `pytest-cov` for coverage:
-
-```bash
-# From V1_implementation directory
-python -m pip install -r ../../requirements.txt
-
-# Optional: coverage support
-python -m pip install pytest-cov
-```
-
-#### Run All Tests
+### Run All Tests
 
 ```bash
 # From V1_implementation directory
@@ -1424,143 +996,36 @@ pytest tests/
 # With verbose output
 pytest tests/ -v
 
-# With coverage report
+# With coverage
 pytest tests/ --cov=. --cov-report=html
 ```
 
-#### Run Specific Test Files
+### Run Specific Tests
 
 ```bash
-# Test all data loaders
-pytest tests/data_loaders/
+# Test data loaders
+pytest tests/data_loaders/ -v
 
-# Test specific loader (e.g., demographics)
-pytest tests/data_loaders/test_demographics_loader.py
+# Test model components
+pytest tests/test_models.py -v
 
-# Test model components only
-pytest tests/test_models.py
-
-# Test training configuration only
-pytest tests/test_training.py
-
-# Test data processing only
-pytest tests/test_data.py
-```
-
-#### Run Specific Test Classes or Methods
-
-```bash
-# Run specific test class
-pytest tests/data_loaders/test_demographics_loader.py::TestDemographicsLoader
-pytest tests/data_loaders/test_age_at_visit_loader.py::TestAgeAtVisitLoader
-
-# Run specific test method
-pytest tests/test_models.py::TestV1Model::test_model_forward
-```
-
-### Test Markers
-
-Tests are marked for different conditions:
-
-- `@pytest.mark.requires_data` - Tests that need actual data files (will skip if data not available)
-- `@pytest.mark.slow` - Tests that take longer to run
-
-Run tests by marker:
-
-```bash
-# Skip tests that require data
-pytest tests/ -m "not requires_data"
-
-# Run only slow tests
-pytest tests/ -m "slow"
-```
-
-### Test Coverage
-
-Generate coverage reports:
-
-```bash
-# Generate HTML coverage report
-pytest tests/ --cov=. --cov-report=html
-
-# View report
-open htmlcov/index.html  # On macOS
+# Test training
+pytest tests/test_training.py -v
 ```
 
 ### Quick Component Testing
 
-For quick testing of individual components during development, you can still use the `if __name__ == "__main__":` blocks in each module:
+For quick testing during development:
 
 ```bash
 # Test configuration
 python training/config.py
 
-# Test embeddings
-python models/embeddings.py
-
-# Test data loaders
-python data/loaders/demographics_loader.py
-python data/loaders/genetics_loader.py
-
 # Test model
 python models/v1_model.py
-```
 
-**Note**: These quick tests are useful during development, but the formal test suite in `tests/` is recommended for comprehensive testing.
-
-### Writing New Tests
-
-When adding new features, add corresponding tests:
-
-1. **Data Loaders**: Create a new file in `tests/data_loaders/` (e.g., `test_new_loader.py`)
-2. **Model Components**: Add tests to `tests/test_models.py`
-3. **Training Utilities**: Add tests to `tests/test_training.py`
-4. **Data Processing**: Add tests to `tests/test_data.py`
-
-#### Example Test Structure
-
-```python
-# tests/data_loaders/test_new_loader.py
-"""
-Tests for NewLoader
-"""
-
-import pytest
-import pandas as pd
-
-
-class TestNewLoader:
-    """Test NewLoader"""
-    
-    @pytest.mark.requires_data
-    def test_new_loader_load(self, test_config, skip_if_no_data):
-        """Test NewLoader can load data"""
-        from data.loaders.new_loader import NewLoader
-        
-        loader = NewLoader(test_config.data.base_dir, test_config)
-        df = loader.load()
-        
-        assert isinstance(df, pd.DataFrame)
-        assert 'PATNO' in df.columns
-        assert len(df) > 0
-```
-
-### Continuous Integration
-
-The test suite is designed to work with CI/CD systems. Example GitHub Actions workflow:
-
-```yaml
-# .github/workflows/test.yml
-name: Tests
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
-      - run: pip install pytest pytest-cov
-      - run: pytest tests/ --cov=. --cov-report=xml
+# Test data pipeline
+python data/data_integrator.py
 ```
 
 ---
@@ -1574,38 +1039,50 @@ jobs:
 | `FileNotFoundError` | Wrong data paths | Update `DataConfig` in `config.py` |
 | `KeyError: column` | Column name mismatch | Check actual CSV columns |
 | GPU out of memory | Batch/model too large | Reduce `batch_size` or `d_model` |
-| Loss is NaN | Learning rate too high | Reduce to 1e-5, normalize features |
+| Loss is NaN | Learning rate too high | Reduce to `1e-5`, check feature normalization |
 | All predictions similar | Low feature variance | Check data, increase `lambda_slope` |
+| Slow data loading | Processing all patients | Use `create_kfold_dataloaders()` which filters per fold |
 
-### Quick Component Testing
+### Data Pipeline Issues
 
-For quick testing during development, you can use the `if __name__ == "__main__":` blocks:
+**Problem**: "Scalers not fitted"
+- **Solution**: Call `integrator.fit_scalers(prepared_data, train_patnos=train_ids)` before `create_feature_vectors()`
 
-```bash
-# Test configuration
-python training/config.py
+**Problem**: "Missing modality data"
+- **Solution**: This is expected. Missing modalities are masked (Mask A). Ensure loaders handle missing data gracefully.
 
-# Test embeddings
-python models/embeddings.py
+**Problem**: "No slopes computed"
+- **Solution**: Patients need ≥3 visits with valid UPDRS totals to compute slopes. Check `min_visits` and data availability.
 
-# Test model
-python models/v1_model.py
+### Training Issues
 
-# Test dataset
-python data/dataset.py
-```
+**Problem**: "Validation loss not decreasing"
+- **Solution**: 
+  - Check learning rate (try `1e-5`)
+  - Verify feature normalization is enabled
+  - Check data quality (missing values, outliers)
+  - Increase `lambda_slope` if slope loss dominates
 
-**For comprehensive testing, see the [Testing](#testing) section above.**
+**Problem**: "Out of memory"
+- **Solution**:
+  - Reduce `batch_size` (e.g., 16 or 8)
+  - Reduce `max_seq_len` (e.g., 15)
+  - Reduce `d_model` (e.g., 128)
+  - Use gradient accumulation
 
 ---
 
 ## Next Steps
 
-### After V1 Works
+After V1 is working:
 
 1. **Evaluate thoroughly**: Check performance by subgroup (LRRK2/GBA carriers, etc.)
-2. **Error analysis**: Where does the model fail?
-3. **Feature importance**: What matters most?
+2. **Error analysis**: Where does the model fail? Which patients/visits?
+3. **Feature importance**: What matters most? (Ablation studies)
+4. **Hyperparameter tuning**: Learning rate, architecture size, loss weights
+5. **Model comparison**: Compare with baselines (linear regression, RNN, etc.)
+
+---
 
 ## Quick Reference
 
@@ -1621,17 +1098,7 @@ python training/config.py
 
 ### Run Tests
 ```bash
-# Run all tests
-pytest tests/
-
-# Run with verbose output
 pytest tests/ -v
-
-# Test all data loaders
-pytest tests/data_loaders/ -v
-
-# Test specific loader (e.g., demographics)
-pytest tests/data_loaders/test_demographics_loader.py -v
 ```
 
 ### Run Data Integration
@@ -1644,7 +1111,7 @@ python data/data_integrator.py
 # Recommended: Use unified CLI
 python -m training.main
 
-# Or use legacy script
+# Or programmatically
 python training/train.py
 ```
 
@@ -1652,17 +1119,7 @@ python training/train.py
 - `training/config.py` - All settings
 - `models/v1_model.py` - Model architecture
 - `data/data_integrator.py` - Data pipeline
-- `data/TASK_ASSIGNMENTS.md` - Parallel task guide
-
----
-
-## License
-
-[Add your license here]
-
-## Contact
-
-[Add contact information]
+- `training/train.py` - Training loop
 
 ---
 

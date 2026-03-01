@@ -171,6 +171,50 @@ def select_patnos_from_predictions(
     )
 
 
+def export_validation_dataset_csv(
+    validation_df: pd.DataFrame,
+    output_path: str,
+) -> str:
+    """
+    Export validation dataset as longitudinal CSV.
+
+    Args:
+        validation_df: DataFrame containing validation dataset with patient data
+        output_path: Path to write validation dataset CSV
+
+    Returns:
+        Resolved output path.
+    """
+    out_path = Path(output_path).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    validation_df.to_csv(out_path, index=False)
+    return str(out_path)
+
+
+def export_validation_dataset_from_csv(
+    validation_csv_path: str,
+    output_filename: str = "validation_dataset_longitudinal.csv",
+) -> str:
+    """
+    Export validation dataset from CSV to longitudinal CSV format.
+    Saves output to the same directory as the input CSV.
+
+    Args:
+        validation_csv_path: Path to validation dataset CSV
+        output_filename: Filename for the output CSV (saved in same directory as input)
+
+    Returns:
+        Resolved output path.
+    """
+    df = pd.read_csv(validation_csv_path)
+    input_dir = Path(validation_csv_path).parent
+    output_path = input_dir / output_filename
+    return export_validation_dataset_csv(
+        validation_df=df,
+        output_path=str(output_path),
+    )
+
+
 if __name__ == "__main__":
     import argparse
 

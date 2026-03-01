@@ -7,13 +7,24 @@ Generates 4 main visualizations:
   D. Distribution of Slope Errors: Histogram of slope prediction errors
 """
 
+import sys
+from pathlib import Path
+
+# Add parent directory to path when running as a script
+if __name__ == "__main__":
+    script_dir = Path(__file__).parent.parent.parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional
-from pathlib import Path
 import torch
 
-from ..io import PlotIO
+try:
+    from ..io import PlotIO
+except ImportError:  # Allow running as a script
+    from visualization.io import PlotIO
 
 
 class EvaluationPlotter:
@@ -194,9 +205,105 @@ class EvaluationPlotter:
             ax.legend(fontsize=9)
             ax.grid(True, alpha=0.3, axis='y')
 
-        total_valid = np.sum(~np.isnan(pred_np) & ~np.isnan(actual_np))
-        fig.suptitle(f"{title} (n={int(total_valid)} visits)", fontsize=14, fontweight='bold', y=0.995)
+        fig.suptitle(f"{title}", fontsize=14, fontweight='bold', y=0.995)
         io.save("time_bucket_performance.png")
+
+    def plot_time_bucket_performance_total_updrs(
+        self,
+        predictions: torch.Tensor,  # [total_visits, 4]
+        actuals: torch.Tensor,  # [total_visits, 4]
+        time_months: torch.Tensor,  # [total_visits]
+        io: PlotIO,
+        time_buckets: Optional[list] = None,
+        title: str = "Time-to-Visit Bucket Performance (Total UPDRS)"
+    ) -> None:
+        """
+        Time-to-Visit Bucket Performance for Total UPDRS
+
+        Uses total UPDRS (sum of 4 components) and summarizes
+        actual vs predicted by time bucket, plus MAE/RMSE per bucket.
+
+        Args:
+            predictions: Model predictions [total_visits, 4]
+            actuals: Ground truth values [total_visits, 4]
+            time_months: Time in months since baseline [total_visits]
+            io: PlotIO instance for saving
+            time_buckets: List of tuples (min, max, label) for time intervals
+            title: Plot title
+        """
+        if time_buckets is None:
+            time_buckets = [
+                (0, 6, '<6 months'),
+                (6, 12, '6-12 months'),
+                (12, 24, '12-24 months'),
+                (24, float('inf'), '>24 months')
+            ]
+
+        pred_np = predictions.cpu().numpy() if isinstance(predictions, torch.Tensor) else predictions
+        actual_np = actuals.cpu().numpy() if isinstance(actuals, torch.Tensor) else actuals
+        time_np = time_months.cpu().numpy() if isinstance(time_months, torch.Tensor) else time_months
+
+        pred_total = np.nansum(pred_np, axis=1)
+        actual_total = np.nansum(actual_np, axis=1)
+
+        valid_mask = np.isfinite(time_np) & np.isfinite(pred_total) & np.isfinite(actual_total)
+        if valid_mask.sum() == 0:
+            print("Warning: No valid total UPDRS data for time-bucket performance")
+            return
+
+        time_valid = time_np[valid_mask]
+        pred_valid = pred_total[valid_mask]
+        actual_valid = actual_total[valid_mask]
+
+        bucket_labels = []
+        mean_actual = []
+        mean_pred = []
+        mae_list = []
+        rmse_list = []
+
+        for min_t, max_t, label in time_buckets:
+            bucket_mask = (time_valid >= min_t) & (time_valid < max_t)
+            if bucket_mask.sum() == 0:
+                continue
+
+            act = actual_valid[bucket_mask]
+            pred = pred_valid[bucket_mask]
+
+            bucket_labels.append(label)
+            mean_actual.append(np.mean(act))
+            mean_pred.append(np.mean(pred))
+            mae_list.append(np.mean(np.abs(pred - act)))
+            rmse_list.append(np.sqrt(np.mean((pred - act) ** 2)))
+
+        if not bucket_labels:
+            print("Warning: No bucketed data for total UPDRS time-bucket performance")
+            return
+
+        x = np.arange(len(bucket_labels))
+
+        fig, (ax_top, ax_bottom) = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+
+        ax_top.plot(x, mean_actual, marker='o', linewidth=2.5, color='steelblue', label='Actual Mean Total UPDRS')
+        ax_top.plot(x, mean_pred, marker='^', linewidth=2.5, color='orange', label='Predicted Mean Total UPDRS')
+        ax_top.set_ylabel('Total UPDRS (Mean)', fontsize=11)
+        ax_top.set_title(title, fontsize=13, fontweight='bold')
+        ax_top.grid(True, alpha=0.3)
+        ax_top.legend(fontsize=10, loc='best')
+
+        width = 0.35
+        ax_bottom.bar(x - width / 2, mae_list, width, label='MAE', alpha=0.8, color='steelblue')
+        ax_bottom.bar(x + width / 2, rmse_list, width, label='RMSE', alpha=0.8, color='orange')
+        ax_bottom.set_xlabel('Time Interval', fontsize=11)
+        ax_bottom.set_ylabel('Error', fontsize=11)
+        ax_bottom.set_xticks(x)
+        ax_bottom.set_xticklabels(bucket_labels, rotation=45, ha='right', fontsize=10)
+        ax_bottom.grid(True, alpha=0.3, axis='y')
+        ax_bottom.legend(fontsize=10)
+
+        total_valid = int(valid_mask.sum())
+        fig.suptitle(f"{title} (n={total_valid} visits)", fontsize=14, fontweight='bold', y=0.995)
+        plt.tight_layout()
+        io.save("time_bucket_performance_total_updrs.png")
 
     def plot_patient_trajectories(
         self,
@@ -295,8 +402,9 @@ class EvaluationPlotter:
             plt.show()
 
     # ==================== E: Single Patient Prediction ====================
+    # ==================== E: Single Patient Total UPDRS ====================
 
-    def plot_single_patient_prediction(
+    def plot_single_patient_total_updrs(
         self,
         predictions: torch.Tensor,  # [total_visits, 4]
         actuals: torch.Tensor,  # [total_visits, 4]
@@ -304,13 +412,13 @@ class EvaluationPlotter:
         patno: np.ndarray,  # [total_visits] - PPMI participant number
         target_patno: int,
         io: Optional[PlotIO] = None,
-        title: str = "Single Patient: Predicted vs Actual UPDRS Scores"
+        title: str = "Single Patient: Predicted vs Actual Total UPDRS"
     ) -> None:
         """
-        E. Single Patient Prediction Performance
+        E. Single Patient Total UPDRS Prediction Performance
         
-        Detailed view of one patient's predicted vs actual UPDRS progression over time.
-        Similar to Graph A but focused on individual patient trajectory.
+        Tracks a single patient's total UPDRS score (sum of 4 components) over time,
+        showing both predicted and actual values on the same plot for easy comparison.
         
         Args:
             predictions: Model predictions [total_visits, 4]
@@ -342,62 +450,63 @@ class EvaluationPlotter:
         pt_pred = pt_pred[sort_idx]
         pt_actual = pt_actual[sort_idx]
 
-        # Create 2x2 subplot for 4 UPDRS totals
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        axes = axes.flatten()
+        # Calculate total UPDRS (sum of 4 components)
+        pred_total = np.nansum(pt_pred, axis=1)
+        actual_total = np.nansum(pt_actual, axis=1)
 
-        for target_idx in range(4):
-            ax = axes[target_idx]
+        # Filter out visits where all components are NaN
+        valid_mask = ~np.isnan(actual_total) & ~np.isnan(pred_total)
+        if valid_mask.sum() == 0:
+            print(f"Warning: PATNO {target_patno} has no valid total UPDRS data")
+            return
 
-            pred = pt_pred[:, target_idx]
-            actual = pt_actual[:, target_idx]
+        pt_time_valid = pt_time[valid_mask]
+        pred_total_valid = pred_total[valid_mask]
+        actual_total_valid = actual_total[valid_mask]
 
-            # Filter out NaN values
-            valid_mask = ~np.isnan(actual) & ~np.isnan(pred)
-            n_visits = valid_mask.sum()
+        # Create figure
+        fig, ax = plt.subplots(figsize=(12, 7))
 
-            if n_visits == 0:
-                ax.text(0.5, 0.5, 'No valid data for this patient', ha='center', va='center', transform=ax.transAxes)
-                ax.set_title(f'{self.target_names[target_idx]} - No Data')
-                continue
+        # Plot actual and predicted total UPDRS
+        ax.plot(pt_time_valid, actual_total_valid, 'o-', linewidth=2.5, markersize=8, 
+                label='Actual Total UPDRS', color='steelblue', alpha=0.8)
+        ax.plot(pt_time_valid, pred_total_valid, '^-', linewidth=2.5, markersize=8, 
+                label='Predicted Total UPDRS', color='orange', alpha=0.8)
 
-            time_valid = pt_time[valid_mask]
-            pred_valid = pred[valid_mask]
-            actual_valid = actual[valid_mask]
-
-            # Calculate metrics for this patient
-            mae = np.mean(np.abs(pred_valid - actual_valid))
-            rmse = np.sqrt(np.mean((pred_valid - actual_valid) ** 2))
-            
-            # Avoid division by zero for R²
-            ss_res = np.sum((actual_valid - pred_valid) ** 2)
-            ss_tot = np.sum((actual_valid - actual_valid.mean()) ** 2)
-            r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
-
-            # Plot with lines connecting visits
-            ax.plot(time_valid, actual_valid, 'o-', linewidth=2.5, markersize=8, label='Actual', color='steelblue', alpha=0.8)
-            ax.plot(time_valid, pred_valid, 's--', linewidth=2.5, markersize=8, label='Predicted', color='orange', alpha=0.8)
-
-            # Perfect prediction line (if there's range)
-            if len(actual_valid) > 0:
-                min_val = min(actual_valid.min(), pred_valid.min())
-                max_val = max(actual_valid.max(), pred_valid.max())
-                ax.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.3, linewidth=1.5, label='Perfect')
-
-            ax.set_xlabel('Months Since Baseline', fontsize=11, fontweight='bold')
-            ax.set_ylabel(f'{self.target_names[target_idx]} Score', fontsize=11, fontweight='bold')
-            ax.set_title(
-                f'{self.target_names[target_idx]} | MAE={mae:.2f} RMSE={rmse:.2f} R²={r2:.3f} | {n_visits} visits',
-                fontsize=12, fontweight='bold'
-            )
-            ax.legend(fontsize=10, loc='best')
-            ax.grid(True, alpha=0.3)
-
-        fig.suptitle(f"{title} (PATNO: {target_patno})", fontsize=15, fontweight='bold', y=0.995)
-        if io:
-            io.save(f"single_patient_PATNO_{target_patno}_predictions.png")
+        # Calculate metrics
+        mae = np.mean(np.abs(pred_total_valid - actual_total_valid))
+        rmse = np.sqrt(np.mean((pred_total_valid - actual_total_valid) ** 2))
+        
+        # Calculate R² only if there's variance in actual scores
+        actual_mean = np.mean(actual_total_valid)
+        ss_tot = np.sum((actual_total_valid - actual_mean) ** 2)
+        if ss_tot > 0:
+            r2 = 1 - np.sum((actual_total_valid - pred_total_valid) ** 2) / ss_tot
         else:
-            plt.tight_layout()
+            r2 = np.nan
+
+        # Formatting
+        ax.set_xlabel('Months Since Baseline', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Total UPDRS Score', fontsize=12, fontweight='bold')
+        ax.set_title(
+            f"{title} (PATNO: {target_patno})\n"
+            f"MAE={mae:.2f} | RMSE={rmse:.2f} | R²={r2:.3f} | {len(pt_time_valid)} visits",
+            fontsize=13, fontweight='bold'
+        )
+        ax.legend(fontsize=11, loc='best', framealpha=0.95)
+        ax.grid(True, alpha=0.3)
+        
+        # Add background shading for reference ranges (optional)
+        # UPDRS total range is typically 0-132
+        ax.axhspan(0, 33, alpha=0.05, color='green', label='Mild')
+        ax.axhspan(33, 66, alpha=0.05, color='yellow')
+        ax.axhspan(66, 132, alpha=0.05, color='red')
+
+        plt.tight_layout()
+        
+        if io:
+            io.save(f"single_patient_total_updrs_PATNO_{target_patno}.png")
+        else:
             plt.show()
 
     # ==================== HEAD 2: Slope Error Distribution ====================
@@ -490,12 +599,12 @@ class EvaluationPlotter:
         visit_numbers: Optional[np.ndarray] = None,  # [total_visits]
         single_patno: Optional[int] = None,  # Specific PATNO to visualize
         io: Optional[PlotIO] = None,
-        output_dir: str = "../V1_implementation/visualization/all_modalities/plots",
+        output_dir: str = r"D:\Workspace\pdS22025\Experiment\V1_implementation\visualization\all_modalities\plots",
         show: bool = False,
         **kwargs
     ) -> None:
         """
-        Generate all 4 evaluation plots in sequence.
+        Generate all evaluation plots in sequence.
         
         Args:
             predictions: Model predictions [total_visits, 4]
@@ -524,6 +633,10 @@ class EvaluationPlotter:
         print("  B. Generating time-bucket performance plots...")
         self.plot_time_bucket_performance(predictions, actuals, time_months, io, **kwargs)
 
+        # B2. Time Bucket Performance (Total UPDRS)
+        print("  B2. Generating time-bucket performance (total UPDRS) plot...")
+        self.plot_time_bucket_performance_total_updrs(predictions, actuals, time_months, io, **kwargs)
+
         # C. Patient Trajectories
         print("  C. Generating patient trajectory plots...")
         self.plot_patient_trajectories(predictions, actuals, patno, time_months, io, **kwargs)
@@ -538,14 +651,16 @@ class EvaluationPlotter:
         # E. Single Patient Prediction (optional)
         if single_patno is not None:
             print(f"  E. Generating single patient prediction plot (PATNO: {single_patno})...")
-            self.plot_single_patient_prediction(predictions, actuals, time_months, patno, single_patno, io, **kwargs)
+            print(f"  F. Generating single patient total UPDRS plot (PATNO: {single_patno})...")
+            self.plot_single_patient_total_updrs(predictions, actuals, time_months, patno, single_patno, io, **kwargs)
         else:
             # If not specified, use first patient in dataset
             unique_patno = np.unique(patno)
             if len(unique_patno) > 0:
                 first_patno = unique_patno[0]
                 print(f"  E. Generating single patient prediction plot (PATNO: {first_patno})...")
-                self.plot_single_patient_prediction(predictions, actuals, time_months, patno, first_patno, io, **kwargs)
+                print(f"  F. Generating single patient total UPDRS plot (PATNO: {first_patno})...")
+                self.plot_single_patient_total_updrs(predictions, actuals, time_months, patno, first_patno, io, **kwargs)
 
         print(f"✓ All evaluation plots saved to {io.output_dir}")
 
@@ -846,7 +961,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-splits", type=int, default=10, help="Number of CV folds used during training")
     parser.add_argument("--test-ratio", type=float, default=0.2, help="Test split ratio used during training")
     parser.add_argument("--device", default=None, help="Device to use (e.g., cuda, cpu)")
-    parser.add_argument("--output-dir", default="../V1_implementation/visualization/all_modalities/plots", help="Output directory for plots")
+    parser.add_argument("--output-dir", default=r"D:\Workspace\pdS22025\Experiment\V1_implementation\visualization\all_modalities\plots", help="Output directory for plots")
     parser.add_argument("--show", action="store_true", help="Display plots on screen (default: save only)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--single-patno", type=int, default=None, help="PATNO for single-patient plot")

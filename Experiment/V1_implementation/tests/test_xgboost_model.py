@@ -152,3 +152,40 @@ def test_temporal_smoke(dummy_longitudinal_dataset):
     )
     assert 'next_visit_metrics' in results
     assert 'slope_metrics' in results
+
+
+def test_run_xgb_only_cli(dummy_longitudinal_dataset, tmp_path, monkeypatch):
+    """Invoke the run_xgb_only module with patched data components.
+
+    This ensures the CLI wiring added earlier doesn't crash and produces
+    output files.  The actual data used is the same tiny dummy dataset
+    employed by the other unit tests.
+    """
+    from types import SimpleNamespace
+    import training.run_xgb_only as run_script
+
+    # patch DataIntegrator so prepare_final_dataset() is a no-op
+    class DummyIntegrator:
+        def __init__(self, cfg, normalize_features):
+            pass
+        def prepare_final_dataset(self):
+            return None
+    monkeypatch.setattr(run_script, 'DataIntegrator', DummyIntegrator)
+
+    # patch create_dataloaders to return three identical loaders
+    def dummy_create_dataloaders(prepared_data, config, **kwargs):
+        ns = lambda ds: SimpleNamespace(dataset=ds)
+        return ns(dummy_longitudinal_dataset), ns(dummy_longitudinal_dataset), ns(dummy_longitudinal_dataset)
+    monkeypatch.setattr(run_script, 'create_dataloaders', dummy_create_dataloaders)
+
+    # patch configuration provider to point at tmp_path
+    cfg = SimpleNamespace(data=SimpleNamespace(model_save_dir=str(tmp_path)))
+    monkeypatch.setattr(run_script, 'get_default_config_v1', lambda: cfg)
+
+    # run the script with minimal arguments
+    monkeypatch.setattr('sys.argv', ['run_xgb_only.py', '--train-ratio', '1.0', '--val-ratio', '0.0', '--seed', '42', '--xgb-outdir', str(tmp_path)])
+    run_script.main()
+
+    assert (tmp_path / 'xgb_flat_metrics.npz').exists()
+    assert (tmp_path / 'xgb_flat_raw_tabular.npz').exists()
+    assert (tmp_path / 'xgb_comparison_summary.csv').exists()

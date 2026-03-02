@@ -22,6 +22,15 @@ from training.config import get_default_config as get_default_config_v1
 from training.config_v2 import get_default_config as get_default_config_v2
 from training.metrics import compute_comprehensive_metrics
 from training.train import V1Trainer
+from models.xgboost_model import run_xgb_experiment as run_xgb_flat_experiment
+from models.xgboost_temporal_model import run_xgb_experiment as run_xgb_temporal_experiment
+from models.xgboost_model import (
+    build_next_visit_tabular as build_next_visit_tabular_flat,
+)
+from models.xgboost_temporal_model import (
+    build_next_visit_tabular as build_next_visit_tabular_temporal,
+)
+from pathlib import Path
 from training.kfold_trainer import KFoldTrainer
 from training.multi_modal_trainer import MultiModalTrainer
 
@@ -97,6 +106,22 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Path to checkpoint to load for fine-tuning or resuming (only used with --mode single)",
+    )
+    parser.add_argument(
+        "--only-xgb",
+        action="store_true",
+        help="Run only the XGBoost baseline on the V1 data splits and exit (single mode only)",
+    )
+    parser.add_argument(
+        "--xgb-temporal",
+        action="store_true",
+        help="When used with --only-xgb, run the temporal (lagged) XGBoost instead of flat features",
+    )
+    parser.add_argument(
+        "--xgb-outdir",
+        type=str,
+        default=None,
+        help="Optional output directory to save XGBoost metrics/models (defaults to config.data.model_save_dir)",
     )
     parser.add_argument(
         "--resume-mode",
@@ -243,6 +268,104 @@ def train_single_split(config, prepared, args):
         test_ratio=1.0 - args.train_ratio - args.val_ratio,
         random_seed=args.seed,
     )
+
+    # If user requested to run only the XGBoost baseline, do so and exit.
+    if getattr(args, 'only_xgb', False):
+        out_dir = Path(args.xgb_outdir) if args.xgb_outdir else Path(config.data.model_save_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        target_names = getattr(config.features, "all_updrs_totals", ["NP1RTOT", "NP2PTOT", "NP3TOT", "NP4TOT"])
+
+        if getattr(args, 'xgb_temporal', False):
+            print("Running XGBoost temporal baseline (lagged features)...")
+            results = run_xgb_temporal_experiment(
+                train_dataset=train_loader.dataset,
+                val_dataset=val_loader.dataset,
+                test_dataset=test_loader.dataset,
+                target_names=target_names,
+            )
+            prefix = "xgb_temporal"
+        else:
+            print("Running XGBoost baseline (flat features)...")
+            results = run_xgb_flat_experiment(
+                train_dataset=train_loader.dataset,
+                val_dataset=val_loader.dataset,
+                test_dataset=test_loader.dataset,
+                target_names=target_names,
+            )
+            prefix = "xgb_flat"
+
+        # Save metrics and raw tabular arrays
+        np.savez(out_dir / f"{prefix}_metrics.npz",
+                 next_visit_metrics=results["next_visit_metrics"],
+                 slope_metrics=results["slope_metrics"])
+
+        # Choose appropriate builder for raw tabular arrays
+        build_fn = build_next_visit_tabular_temporal if prefix == "xgb_temporal" else build_next_visit_tabular_flat
+        X_tr, y_tr, mask_tr, dt_tr = build_fn(train_loader.dataset)
+        X_val, y_val, mask_val, dt_val = build_fn(val_loader.dataset)
+        X_te, y_te, mask_te, dt_te = build_fn(test_loader.dataset)
+
+        np.savez(out_dir / f"{prefix}_raw_tabular.npz",
+             X_tr=X_tr, y_tr=y_tr, mask_tr=mask_tr, dt_tr=dt_tr,
+             X_val=X_val, y_val=y_val, mask_val=mask_val, dt_val=dt_val,
+             X_te=X_te, y_te=y_te, mask_te=mask_te, dt_te=dt_te)
+
+        for i, booster in enumerate(results.get("models_next_visit", [])):
+            booster.save_model(str(out_dir / f"{prefix}_next_visit_target{i}.json"))
+        for i, booster in enumerate(results.get("models_slope", [])):
+            booster.save_model(str(out_dir / f"{prefix}_slope_target{i}.json"))
+
+        # Build a small summary row and append to CSV
+        def _extract_summary(metrics_dict: dict):
+            maelist = []
+            rmselist = []
+            n_total = 0
+            for v in metrics_dict.get('next_visit', {}).values():
+                if isinstance(v, dict):
+                    if 'mae' in v:
+                        maelist.append(v.get('mae', np.nan))
+                    if 'rmse' in v:
+                        rmselist.append(v.get('rmse', np.nan))
+                    n_total += int(v.get('n_samples', 0) or 0)
+            mean_mae = float(np.nanmean(maelist)) if maelist else float('nan')
+            mean_rmse = float(np.nanmean(rmselist)) if rmselist else float('nan')
+
+            accs = []
+            f1s = []
+            # per-target values
+            for v in metrics_dict.get('next_visit', {}).values():
+                if isinstance(v, dict):
+                    if 'accuracy' in v:
+                        accs.append(v.get('accuracy', np.nan))
+                    if 'f1' in v:
+                        f1s.append(v.get('f1', np.nan))
+
+            mean_acc = float(np.nanmean(accs)) if accs else float('nan')
+            mean_f1 = float(np.nanmean(f1s)) if f1s else float('nan')
+
+            return mean_mae, mean_rmse, mean_acc, mean_f1, n_total
+
+        mean_mae, mean_rmse, mean_acc, mean_f1, n_total = _extract_summary(results.get('next_visit_metrics', {}))
+
+        import csv
+        summary_path = out_dir / 'xgb_comparison_summary.csv'
+        write_header = not summary_path.exists()
+        with open(summary_path, 'a', newline='') as fh:
+            writer = csv.writer(fh)
+            if write_header:
+                writer.writerow(['Model', 'Variant', 'Mean_MAE', 'Mean_RMSE', 'Mean_Accuracy', 'Mean_F1', 'Total_Samples'])
+            writer.writerow([
+                'xgboost', prefix,
+                f"{mean_mae:.4f}" if not np.isnan(mean_mae) else '',
+                f"{mean_rmse:.4f}" if not np.isnan(mean_rmse) else '',
+                f"{mean_acc:.4f}" if not np.isnan(mean_acc) else '',
+                f"{mean_f1:.4f}" if not np.isnan(mean_f1) else '',
+                int(n_total)
+            ])
+
+        print(f"Saved XGBoost results to {out_dir}")
+        return
 
     print("\nBuilding model...")
     model = V1MultimodalTransformer(config)

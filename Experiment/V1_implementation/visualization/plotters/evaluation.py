@@ -465,13 +465,13 @@ class EvaluationPlotter:
         actual_total_valid = actual_total[valid_mask]
 
         # Create figure
-        fig, ax = plt.subplots(figsize=(12, 7))
+        fig, ax = plt.subplots(figsize=(15, 6))
 
         # Plot actual and predicted total UPDRS
         ax.plot(pt_time_valid, actual_total_valid, 'o-', linewidth=2.5, markersize=8, 
-                label='Actual Total UPDRS', color='steelblue', alpha=0.8)
+                label='Actual Total UPDRS', color='#04545e', alpha=0.8)
         ax.plot(pt_time_valid, pred_total_valid, '^-', linewidth=2.5, markersize=8, 
-                label='Predicted Total UPDRS', color='orange', alpha=0.8)
+                label='Predicted Total UPDRS', color='#f7931e', alpha=0.8)
 
         # Calculate metrics
         mae = np.mean(np.abs(pred_total_valid - actual_total_valid))
@@ -486,21 +486,25 @@ class EvaluationPlotter:
             r2 = np.nan
 
         # Formatting
-        ax.set_xlabel('Months Since Baseline', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Total UPDRS Score', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Months Since Baseline', fontsize=12)
+        ax.set_ylabel('Total UPDRS Score', fontsize=12)
         ax.set_title(
-            f"{title} (PATNO: {target_patno})\n"
+            f"Patient Number: {target_patno}\n"
             f"MAE={mae:.2f} | RMSE={rmse:.2f} | R²={r2:.3f} | {len(pt_time_valid)} visits",
             fontsize=13, fontweight='bold'
         )
         ax.legend(fontsize=11, loc='best', framealpha=0.95)
-        ax.grid(True, alpha=0.3)
+        # ax.grid(True, alpha=0.3)
         
         # Add background shading for reference ranges (optional)
         # UPDRS total range is typically 0-132
-        ax.axhspan(0, 33, alpha=0.05, color='green', label='Mild')
-        ax.axhspan(33, 66, alpha=0.05, color='yellow')
-        ax.axhspan(66, 132, alpha=0.05, color='red')
+        # ax.axhspan(0, 33, alpha=0.05, color='green', label='Mild')
+        # ax.axhspan(33, 66, alpha=0.05, color='yellow')
+        # ax.axhspan(66, 132, alpha=0.05, color='red')
+
+        ax.spines[['top', 'right', 'left', 'bottom']].set_visible(True)
+        ax.spines[['top', 'right', 'left', 'bottom']].set_color('#CCCCCC')
+        ax.spines[['top', 'right', 'left', 'bottom']].set_linewidth(0.8)
 
         plt.tight_layout()
         
@@ -934,16 +938,22 @@ def evaluate_fold_checkpoint(
         show=False
     )
 
-    if single_patno is not None:
-        print(f"Generating single patient plot for PATNO: {single_patno}")
-        plotter.plot_single_patient_prediction(
-            predictions=predictions,
-            actuals=actuals,
-            time_months=time_months,
-            patno=patno,
-            target_patno=int(single_patno),
-            io=io
-        )
+    # `plot_all_evaluations` already generates the single-patient total-UPDRS
+    # figure when `single_patno` is provided. The legacy call below attempted to
+    # use a method named `plot_single_patient_prediction` which doesn't exist and
+    # was triggering an AttributeError. Removing the redundant block avoids the
+    # error while preserving the intended behavior.
+    #
+    # if single_patno is not None:
+    #     print(f"Generating single patient plot for PATNO: {single_patno}")
+    #     plotter.plot_single_patient_prediction(
+    #         predictions=predictions,
+    #         actuals=actuals,
+    #         time_months=time_months,
+    #         patno=patno,
+    #         target_patno=int(single_patno),
+    #         io=io
+    #     )
 
 
 if __name__ == "__main__":
